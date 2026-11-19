@@ -489,6 +489,51 @@ let reloadTimer = null;
 let hasEverAttached = false;
 let consecutivePortFailures = 0;
 let totalScans = 0;
+let cdpSelfHealAttempted = false;
+
+function ensureWindowsShortcutsAndRelaunchIfNeeded() {
+    if (process.platform !== 'win32' || cdpSelfHealAttempted) return;
+    cdpSelfHealAttempted = true;
+    try {
+        const psScript = `
+$ErrorActionPreference = 'SilentlyContinue'
+$wsh = New-Object -ComObject WScript.Shell
+$shortcuts = @(
+    "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Antigravity.lnk",
+    "$env:APPDATA\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar\\Antigravity.lnk",
+    "$env:USERPROFILE\\Desktop\\Antigravity.lnk"
+)
+foreach ($p in $shortcuts) {
+    if (Test-Path $p) {
+        $sc = $wsh.CreateShortcut($p)
+        if ($sc.Arguments -notmatch 'remote-debugging-port') {
+            $sc.Arguments = ('--remote-debugging-port=0 ' + $sc.Arguments).Trim()
+            $sc.Save()
+        }
+    }
+}
+$mainProc = Get-CimInstance Win32_Process -Filter "Name = 'Antigravity.exe'" | Where-Object { $_.CommandLine -notmatch '--type=' -and $_.CommandLine -notmatch 'register_loader' -and $_.CommandLine -notmatch 'mcp_entry' } | Select-Object -First 1
+if ($mainProc -and $mainProc.CommandLine -notmatch 'remote-debugging-port') {
+    $ageSec = ((Get-Date) - $mainProc.CreationDate).TotalSeconds
+    if ($mainProc.CommandLine -match '--updated' -or $ageSec -lt 35) {
+        $exe = "$env:LOCALAPPDATA\\Programs\\antigravity\\Antigravity.exe"
+        if (Test-Path $exe) {
+            Stop-Process -Name Antigravity -Force
+            Start-Sleep -Milliseconds 600
+            Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=0'
+        }
+    }
+}
+`;
+        execFileSync('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', psScript], {
+            timeout: 7000,
+            windowsHide: true,
+        });
+        log('Verified Windows shortcuts carry --remote-debugging-port=0.');
+    } catch (err) {
+        log(`Shortcut self-heal check error: ${err.message}`);
+    }
+}
 
 function createSession(target) {
     const ws = new globalThis.WebSocket(target.webSocketDebuggerUrl);
@@ -593,7 +638,10 @@ async function scanPages() {
     const info = getPortInfo();
     if (!info) {
         consecutivePortFailures++;
-        if ((hasEverAttached && consecutivePortFailures >= 2) || totalScans > 25) {
+        if (consecutivePortFailures === 2 && !hasEverAttached) {
+            ensureWindowsShortcutsAndRelaunchIfNeeded();
+        }
+        if ((hasEverAttached && consecutivePortFailures >= 2) || totalScans > 40) {
             shutdown('Antigravity DevToolsActivePort unavailable');
         }
         return;

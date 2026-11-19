@@ -316,6 +316,8 @@
       }
       if (overrides.liveWp !== undefined) {
         localStorage.setItem(STORAGE_LIVE_WP, overrides.liveWp ? JSON.stringify(overrides.liveWp) : '');
+      } else if (st.liveWp && localStorage.getItem(STORAGE_LIVE_WP) === null) {
+        localStorage.setItem(STORAGE_LIVE_WP, JSON.stringify(st.liveWp));
       }
       if (overrides.livePauseBlur !== undefined) {
         localStorage.setItem(STORAGE_LIVE_PAUSE_BLUR, String(Boolean(overrides.livePauseBlur)));

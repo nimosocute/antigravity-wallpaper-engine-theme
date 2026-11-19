@@ -94,6 +94,26 @@ if (-not $NoStartup) {
     } | ConvertTo-Json -Depth 5
     Set-Content -Path (Join-Path $SidecarDir 'sidecar.json') -Value $SidecarJson -Encoding UTF8
     Write-Host "[install-win] Registered native Antigravity sidecar: $(Join-Path $SidecarDir 'sidecar.json')"
+
+    # Ensure Antigravity shortcuts include --remote-debugging-port=0 (required on Antigravity >= 2.33.0)
+    $WshShell = New-Object -ComObject WScript.Shell
+    $AgyShortcuts = @(
+        (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity.lnk'),
+        (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Antigravity.lnk'),
+        (Join-Path $env:USERPROFILE 'Desktop\Antigravity.lnk')
+    )
+    foreach ($LnkPath in $AgyShortcuts) {
+        if (Test-Path $LnkPath) {
+            try {
+                $Sc = $WshShell.CreateShortcut($LnkPath)
+                if ($Sc.Arguments -notmatch 'remote-debugging-port') {
+                    $Sc.Arguments = ("--remote-debugging-port=0 " + $Sc.Arguments).Trim()
+                    $Sc.Save()
+                    Write-Host "[install-win] Enabled --remote-debugging-port=0 on shortcut: $LnkPath"
+                }
+            } catch {}
+        }
+    }
 }
 
 if (Test-Path $PidFile) {
