@@ -497,10 +497,11 @@
         iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none;display:block;';
         layer.appendChild(iframe);
       } else if (isDx11Scene) {
-        layer.style.background = '#070910 url("' + mediaUrl + '") center/cover no-repeat';
+        const previewUrl = live.previewFile ? buildMediaUrl(live.id, live.previewFile) : mediaUrl;
+        layer.style.background = '#070910 url("' + previewUrl + '") center/cover no-repeat';
         const video = document.createElement('video');
         video.id = 'agy-live-wp-video';
-        video.poster = mediaUrl;
+        video.poster = previewUrl;
         video.autoplay = true;
         video.muted = true;
         video.playsInline = true;

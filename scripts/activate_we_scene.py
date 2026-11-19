@@ -442,8 +442,8 @@ def main() -> None:
         return
 
     cloak_agy_bg_window(hwnd)
-    # Wait briefly for wallpaper64.exe to finish its initial D3D11/SetWindowPos setup, then re-lock exact 1920x1080
-    time.sleep(0.28)
+    # Wait for wallpaper64.exe to finish loading the new scene's first frame & D3D11 swapchain, then re-lock exact 1920x1080
+    time.sleep(0.45)
     cloak_agy_bg_window(hwnd)
     try:
         set_we_audio_volume(int(float(vol_arg)) if vol_arg else 0)
