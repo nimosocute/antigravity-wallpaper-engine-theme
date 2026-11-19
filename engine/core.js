@@ -495,9 +495,25 @@
         layer.innerHTML = '';
       } else {
         layer.style.background = '';
+        const prevVid = layer.querySelector('video');
+        if (prevVid && prevVid.videoWidth > 0 && prevVid.videoHeight > 0) {
+          try {
+            const snap = document.createElement('canvas');
+            snap.width = prevVid.videoWidth;
+            snap.height = prevVid.videoHeight;
+            snap.dataset.agyStale = '1';
+            snap.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;display:block;';
+            const ctx = snap.getContext('2d');
+            if (ctx) ctx.drawImage(prevVid, 0, 0, snap.width, snap.height);
+            const sc = layer.querySelector('#agy-live-wp-scrim');
+            if (sc) layer.insertBefore(snap, sc);
+            else layer.appendChild(snap);
+          } catch (e) {}
+        }
         layer.querySelectorAll('video, canvas, iframe').forEach(el => {
-          el.dataset.agyStale = '1';
-          el.removeAttribute('id');
+          if (el.tagName === 'CANVAS' && el.dataset.agyStale === '1') return;
+          if (el.tagName === 'VIDEO') stopVideoElement(el);
+          el.remove();
         });
       }
 
@@ -567,7 +583,12 @@
                 }
                 stopVideoElement(curVid);
                 curVid.onplaying = () => {
-                  setTimeout(() => {
+                  const probe = document.createElement('canvas');
+                  probe.width = 16;
+                  probe.height = 9;
+                  const pctx = probe.getContext('2d', { willReadFrequently: true });
+                  const startedAt = Date.now();
+                  const reveal = () => {
                     if (!curVid.isConnected) return;
                     curVid.style.opacity = '1';
                     setTimeout(() => {
@@ -577,7 +598,26 @@
                         el.remove();
                       });
                     }, 240);
-                  }, 120);
+                  };
+                  const pollFrame = () => {
+                    if (!curVid.isConnected || curLayer.dataset.mediaKey !== reqKey) return;
+                    let nonBlack = false;
+                    if (pctx && curVid.videoWidth > 0) {
+                      try {
+                        pctx.drawImage(curVid, 0, 0, 16, 9);
+                        const px = pctx.getImageData(0, 0, 16, 9).data;
+                        let sum = 0;
+                        for (let i = 0; i < px.length; i += 4) sum += px[i] + px[i + 1] + px[i + 2];
+                        if (sum / (16 * 9 * 3) > 3.5) nonBlack = true;
+                      } catch (e) { nonBlack = true; }
+                    }
+                    if (nonBlack || Date.now() - startedAt > 1500) {
+                      reveal();
+                    } else {
+                      setTimeout(pollFrame, 60);
+                    }
+                  };
+                  setTimeout(pollFrame, 60);
                 };
                 curVid.srcObject = stream;
                 const p = curVid.play();
