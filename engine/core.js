@@ -613,6 +613,19 @@
                 curVid.srcObject = stream;
                 const p = curVid.play();
                 if (p && typeof p.catch === 'function') p.catch(() => {});
+                setTimeout(() => {
+                  if (curVid.isConnected && curLayer.dataset.mediaKey === reqKey && curVid.style.opacity === '0') {
+                    if (curVid.videoWidth > 0) {
+                      curVid.style.opacity = '1';
+                    } else {
+                      stopVideoElement(curVid);
+                      curVid.remove();
+                      const sc = curLayer.querySelector('#agy-live-wp-scrim');
+                      mountStandaloneSceneEngine(curLayer, live, mediaUrl);
+                      if (sc) curLayer.appendChild(sc);
+                    }
+                  }
+                }, 4500);
               } catch (e) {
                 stopStandaloneSceneEngine();
                 curLayer.querySelectorAll('[data-agy-stale="1"]').forEach(el => {
@@ -625,7 +638,32 @@
                 if (sc) curLayer.appendChild(sc);
               }
             })
-            .catch(() => {});
+            .catch(() => {
+              const curLayer = document.getElementById('agy-live-wp-layer');
+              if (!curLayer || curLayer.dataset.mediaKey !== reqKey) return;
+              stopStandaloneSceneEngine();
+              curLayer.querySelectorAll('[data-agy-stale="1"]').forEach(el => {
+                if (el.tagName === 'VIDEO') stopVideoElement(el);
+                el.remove();
+              });
+              const sc = curLayer.querySelector('#agy-live-wp-scrim');
+              const vOld = curLayer.querySelector('#agy-live-wp-video');
+              if (vOld) vOld.remove();
+              mountStandaloneSceneEngine(curLayer, live, mediaUrl);
+              if (sc) curLayer.appendChild(sc);
+              // Retry DX11 scene once after 3.5s in case Wallpaper Engine was still cold-starting
+              if (!window.__AGY_DX11_RETRIED__?.[reqKey]) {
+                window.__AGY_DX11_RETRIED__ = window.__AGY_DX11_RETRIED__ || {};
+                window.__AGY_DX11_RETRIED__[reqKey] = true;
+                setTimeout(() => {
+                  const l2 = document.getElementById('agy-live-wp-layer');
+                  if (l2 && l2.dataset.mediaKey === reqKey) {
+                    l2.dataset.mediaKey = '';
+                    applyTheme();
+                  }
+                }, 3500);
+              }
+            });
         } else {
           mountStandaloneSceneEngine(layer, live, mediaUrl);
         }

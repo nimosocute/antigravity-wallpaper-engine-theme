@@ -650,7 +650,7 @@ function startMediaServer() {
             const args = id === 'close'
                 ? [scriptPy, wsDir, 'close', slot]
                 : [scriptPy, wsDir, id, props || '', vol !== null && vol !== '' ? String(Math.max(0, Math.min(100, Math.round(Number(vol) || 0)))) : '', slot || 'AGY_BG'];
-            execFile(pyExe, args, { timeout: 12000, windowsHide: true }, (err, stdout, stderr) => {
+            execFile(pyExe, args, { timeout: 25000, windowsHide: true }, (err, stdout, stderr) => {
                 if (err) {
                     res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
                     res.end(JSON.stringify({ ok: false, error: stderr || err.message }));
