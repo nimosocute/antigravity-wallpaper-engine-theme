@@ -636,6 +636,7 @@ function startMediaServer() {
         if (pathname === '/api/we/activate-scene') {
             const id = String(parsedUrl.searchParams.get('id') || '').trim();
             const props = String(parsedUrl.searchParams.get('props') || '').trim();
+            const vol = parsedUrl.searchParams.get('volume');
             const wsDir = resolveWeWorkshopDir();
             if (!wsDir || !/^[a-zA-Z0-9_-]+$/.test(id)) {
                 res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -645,7 +646,8 @@ function startMediaServer() {
             const scriptPy = path.join(ROOT_DIR, 'scripts', 'activate_we_scene.py');
             const pyCandidates = ['C:\\Python314\\python.exe', 'python', 'python3'];
             const pyExe = pyCandidates.find((p) => p === 'python' || p === 'python3' || fs.existsSync(p)) || 'python';
-            const args = props ? [scriptPy, wsDir, id, props] : [scriptPy, wsDir, id];
+            const args = [scriptPy, wsDir, id, props || ''];
+            if (vol !== null && vol !== '') args.push(String(Math.max(0, Math.min(100, Math.round(Number(vol) || 0)))));
             execFile(pyExe, args, { timeout: 12000, windowsHide: true }, (err, stdout, stderr) => {
                 if (err) {
                     res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -654,6 +656,24 @@ function startMediaServer() {
                 }
                 res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
                 res.end(String(stdout || '').trim() || JSON.stringify({ ok: false, error: 'Empty output' }));
+            });
+            return;
+        }
+
+        if (pathname === '/api/we/set-volume') {
+            const vol = Math.max(0, Math.min(100, Math.round(Number(parsedUrl.searchParams.get('volume') || 0) || 0)));
+            const wsDir = resolveWeWorkshopDir() || ROOT_DIR;
+            const scriptPy = path.join(ROOT_DIR, 'scripts', 'activate_we_scene.py');
+            const pyCandidates = ['C:\\Python314\\python.exe', 'python', 'python3'];
+            const pyExe = pyCandidates.find((p) => p === 'python' || p === 'python3' || fs.existsSync(p)) || 'python';
+            execFile(pyExe, [scriptPy, wsDir, 'volume', String(vol)], { timeout: 5000, windowsHide: true }, (err, stdout) => {
+                if (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false, error: err.message }));
+                    return;
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+                res.end(String(stdout || '').trim() || JSON.stringify({ ok: true, volume: vol }));
             });
             return;
         }

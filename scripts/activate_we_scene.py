@@ -52,6 +52,8 @@ class PROCESS_INFORMATION(ctypes.Structure):
     ]
 
 
+user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+user32.GetSystemMetrics.restype = ctypes.c_int
 user32.OpenDesktopW.argtypes = [ctypes.c_wchar_p, ctypes.c_ulong, ctypes.c_bool, ctypes.c_ulong]
 user32.OpenDesktopW.restype = ctypes.c_void_p
 user32.SetThreadDesktop.argtypes = [ctypes.c_void_p]
@@ -168,8 +170,133 @@ def cloak_agy_bg_window(hwnd: int) -> None:
         (ex | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED) & ~WS_EX_APPWINDOW,
     )
     # Alpha = 1/255: 100% invisible on desktop & click-through, while WGC captures 100% full-brightness D3D11 swapchain!
+    # Position completely outside the virtual screen bounds so WGC NEVER captures the user's mouse cursor over AGY_BG.
     user32.SetLayeredWindowAttributes(hwnd, 0, 1, 2)
-    user32.SetWindowPos(hwnd, 1, 0, 0, 1920, 1080, 0x0010 | 0x0020 | 0x0040)
+    off_y = max(3000, int(user32.GetSystemMetrics(77)) + int(user32.GetSystemMetrics(79)) + 1000)
+    user32.SetWindowPos(hwnd, 1, 0, off_y, 1920, 1080, 0x0010 | 0x0020 | 0x0040)
+
+
+def get_we_pids() -> set[int]:
+    pids: set[int] = set()
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["tasklist", "/FI", "IMAGENAME eq wallpaper64.exe", "/FO", "CSV", "/NH"],
+            text=True,
+            creationflags=0x08000000,
+        )
+        for line in out.splitlines():
+            parts = [p.strip().strip('"') for p in line.split(",")]
+            if len(parts) >= 2 and parts[1].isdigit():
+                pids.add(int(parts[1]))
+    except Exception:
+        pass
+    try:
+        hwnd = user32.FindWindowExW(0, 0, "WPEEventWindow", None) or user32.FindWindowExW(0, 0, "WPETrayWindow", None)
+        if hwnd:
+            pid = ctypes.c_ulong(0)
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value:
+                pids.add(int(pid.value))
+    except Exception:
+        pass
+    return pids
+
+
+def set_we_audio_volume(volume_pct: int) -> bool:
+    vol_norm = max(0.0, min(1.0, float(volume_pct) / 100.0))
+    target_pids = get_we_pids()
+    if not target_pids:
+        return False
+    try:
+        from ctypes import POINTER, c_float, c_int, c_uint, c_ulong, c_void_p
+        import comtypes
+        from comtypes import CLSCTX_ALL, COMMETHOD, GUID, IUnknown
+
+        CLSID_MMDeviceEnumerator = GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}")
+        IID_IMMDeviceEnumerator = GUID("{A95664D2-9614-4F35-A746-DE8DB63617E6}")
+        IID_IAudioSessionManager2 = GUID("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}")
+        IID_IAudioSessionControl2 = GUID("{BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D}")
+        IID_ISimpleAudioVolume = GUID("{87CE5498-68D6-44E5-9215-6DA47EF883D8}")
+
+        class IMMDevice(IUnknown):
+            _iid_ = GUID("{D666063F-1587-4E43-81F1-B948E807363F}")
+            _methods_ = [
+                COMMETHOD([], ctypes.HRESULT, "Activate", (["in"], POINTER(GUID), "iid"), (["in"], c_ulong, "dwClsCtx"), (["in"], c_void_p, "pActivationParams"), (["out"], POINTER(c_void_p), "ppInterface")),
+            ]
+
+        class IMMDeviceEnumerator(IUnknown):
+            _iid_ = IID_IMMDeviceEnumerator
+            _methods_ = [
+                COMMETHOD([], ctypes.HRESULT, "EnumAudioEndpoints"),
+                COMMETHOD([], ctypes.HRESULT, "GetDefaultAudioEndpoint", (["in"], c_uint, "dataFlow"), (["in"], c_uint, "role"), (["out"], POINTER(POINTER(IMMDevice)), "ppEndpoint")),
+            ]
+
+        class IAudioSessionControl(IUnknown):
+            _iid_ = GUID("{F4B1A599-7266-4319-A8CA-E70ACB11E8CD}")
+            _methods_ = [
+                COMMETHOD([], ctypes.HRESULT, "GetState", (["out"], POINTER(c_uint), "pRetVal")),
+            ]
+
+        class IAudioSessionControl2(IAudioSessionControl):
+            _iid_ = IID_IAudioSessionControl2
+            _methods_ = [
+                COMMETHOD([], ctypes.HRESULT, "GetDisplayName"),
+                COMMETHOD([], ctypes.HRESULT, "SetDisplayName"),
+                COMMETHOD([], ctypes.HRESULT, "GetIconPath"),
+                COMMETHOD([], ctypes.HRESULT, "SetIconPath"),
+                COMMETHOD([], ctypes.HRESULT, "GetGroupingParam"),
+                COMMETHOD([], ctypes.HRESULT, "SetGroupingParam"),
+                COMMETHOD([], ctypes.HRESULT, "RegisterAudioSessionNotification"),
+                COMMETHOD([], ctypes.HRESULT, "UnregisterAudioSessionNotification"),
+                COMMETHOD([], ctypes.HRESULT, "GetSessionIdentifier"),
+                COMMETHOD([], ctypes.HRESULT, "GetSessionInstanceIdentifier"),
+                COMMETHOD([], ctypes.HRESULT, "GetProcessId", (["out"], POINTER(c_ulong), "pRetVal")),
+            ]
+
+        class IAudioSessionEnumerator(IUnknown):
+            _iid_ = GUID("{E2F5BB11-0570-40CA-ACDD-3AA01277DEE8}")
+            _methods_ = [
+                COMMETHOD([], ctypes.HRESULT, "GetCount", (["out"], POINTER(c_uint), "SessionCount")),
+                COMMETHOD([], ctypes.HRESULT, "GetSession", (["in"], c_uint, "SessionCount"), (["out"], POINTER(POINTER(IAudioSessionControl)), "Session")),
+            ]
+
+        class IAudioSessionManager2(IUnknown):
+            _iid_ = IID_IAudioSessionManager2
+            _methods_ = [
+                COMMETHOD([], ctypes.HRESULT, "GetAudioSessionControl"),
+                COMMETHOD([], ctypes.HRESULT, "GetSimpleAudioVolume"),
+                COMMETHOD([], ctypes.HRESULT, "GetSessionEnumerator", (["out"], POINTER(POINTER(IAudioSessionEnumerator)), "SessionEnum")),
+            ]
+
+        class ISimpleAudioVolume(IUnknown):
+            _iid_ = IID_ISimpleAudioVolume
+            _methods_ = [
+                COMMETHOD([], ctypes.HRESULT, "SetMasterVolume", (["in"], c_float, "fLevel"), (["in"], c_void_p, "EventContext")),
+                COMMETHOD([], ctypes.HRESULT, "GetMasterVolume", (["out"], POINTER(c_float), "pfLevel")),
+                COMMETHOD([], ctypes.HRESULT, "SetMute", (["in"], c_int, "bMute"), (["in"], c_void_p, "EventContext")),
+            ]
+
+        comtypes.CoInitialize()
+        enum = comtypes.CoCreateInstance(CLSID_MMDeviceEnumerator, IMMDeviceEnumerator, CLSCTX_ALL)
+        dev = enum.GetDefaultAudioEndpoint(0, 1)
+        mgr_ptr = dev.Activate(ctypes.byref(IID_IAudioSessionManager2), CLSCTX_ALL, None)
+        mgr = ctypes.cast(mgr_ptr, POINTER(IAudioSessionManager2))
+        sess_enum = mgr.GetSessionEnumerator()
+        cnt = sess_enum.GetCount()
+        updated = False
+        for i in range(cnt):
+            ctl = sess_enum.GetSession(i)
+            ctl2 = ctl.QueryInterface(IAudioSessionControl2)
+            pid = int(ctl2.GetProcessId())
+            if pid in target_pids:
+                sav = ctl.QueryInterface(ISimpleAudioVolume)
+                sav.SetMasterVolume(vol_norm, None)
+                sav.SetMute(1 if volume_pct <= 0 else 0, None)
+                updated = True
+        return updated
+    except Exception:
+        return False
 
 
 def hex_to_we_color(hex_str: str) -> str:
@@ -232,12 +359,22 @@ def apply_properties_to_project_json(item_dir: Path, props_json: str) -> bool:
 
 def main() -> None:
     if len(sys.argv) < 3:
-        print(json.dumps({"ok": False, "error": "Usage: activate_we_scene.py <workshop_dir> <item_id|close> [props_json]"}))
+        print(json.dumps({"ok": False, "error": "Usage: activate_we_scene.py <workshop_dir> <item_id|close|volume> [props_json|vol] [vol]"}))
         return
 
     ws_dir = Path(sys.argv[1]).resolve()
     action = sys.argv[2].strip()
     props_json = sys.argv[3].strip() if len(sys.argv) > 3 else ""
+    vol_arg = sys.argv[4].strip() if len(sys.argv) > 4 else ""
+
+    if action == "volume":
+        try:
+            v = int(float(props_json)) if props_json else 0
+        except Exception:
+            v = 0
+        ok = set_we_audio_volume(v)
+        print(json.dumps({"ok": ok, "volume": v}))
+        return
 
     attach_default_desktop()
 
@@ -299,6 +436,11 @@ def main() -> None:
         return
 
     cloak_agy_bg_window(hwnd)
+    if vol_arg:
+        try:
+            set_we_audio_volume(int(float(vol_arg)))
+        except Exception:
+            pass
     print(
         json.dumps(
             {
