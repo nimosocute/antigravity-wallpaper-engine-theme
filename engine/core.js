@@ -124,6 +124,13 @@
         iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
         iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none;display:block;';
         layer.appendChild(iframe);
+      } else if (live.type === 'image') {
+        const img = document.createElement('img');
+        img.id = 'agy-live-wp-img';
+        img.src = mediaUrl;
+        img.alt = '';
+        img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;display:block;';
+        layer.appendChild(img);
       } else {
         const video = document.createElement('video');
         video.id = 'agy-live-wp-video';
@@ -1141,13 +1148,23 @@
       `;
 
       backdrop.innerHTML = `
-        <div id="agy-custom-theme-modal-dialog" style="background: rgba(16, 12, 11, 0.97); border: 1.2px solid rgba(212, 148, 106, 0.35); border-radius: 18px; width: 100%; max-width: 900px; height: 86vh; max-height: 860px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.9), 0 0 32px rgba(224, 142, 85, 0.25); font-family: system-ui, -apple-system, sans-serif;">
-          <div id="agy-custom-theme-modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 18px 26px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); background: rgba(22, 16, 14, 0.85);">
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <span style="font-size: 17px; font-weight: 600; color: #f4f4f5; letter-spacing: -0.2px;">Custom Theme Studio</span>
-              <span id="agy-custom-theme-badge" style="font-size: 11.5px; padding: 2.5px 9px; border-radius: 9999px; background: rgba(224, 142, 85, 0.2); color: #e08e55; font-weight: 500; border: 1px solid rgba(224, 142, 85, 0.3);">${THEME_KEYS.length} Preset${THEME_KEYS.length > 1 ? 's' : ''}</span>
+        <div id="agy-custom-theme-modal-dialog" style="background: rgba(16, 12, 11, 0.97); border: 1.2px solid rgba(212, 148, 106, 0.35); border-radius: 18px; width: 95vw; max-width: 1260px; height: 90vh; max-height: 920px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.9), 0 0 32px rgba(224, 142, 85, 0.25); font-family: system-ui, -apple-system, sans-serif;">
+          <div id="agy-custom-theme-modal-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding: 14px 24px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); background: rgba(22, 16, 14, 0.85);">
+            <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 16.5px; font-weight: 600; color: #f4f4f5; letter-spacing: -0.2px;">Custom Theme Studio</span>
+                <span id="agy-custom-theme-badge" style="font-size: 11px; padding: 2px 8px; border-radius: 9999px; background: rgba(224, 142, 85, 0.2); color: #e08e55; font-weight: 500; border: 1px solid rgba(224, 142, 85, 0.3);">${THEME_KEYS.length} Presets</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 6px; background: rgba(0, 0, 0, 0.36); padding: 3px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.1);">
+                <button id="agy-tab-we-btn" type="button" style="padding: 5px 13px; border-radius: 7px; border: none; font-size: 12.5px; font-weight: 600; cursor: pointer; background: rgba(224, 142, 85, 0.24); color: #ffffff; transition: all 0.15s ease;">🎬 Wallpaper Engine Gallery</button>
+                <button id="agy-tab-studio-btn" type="button" style="padding: 5px 13px; border-radius: 7px; border: none; font-size: 12.5px; font-weight: 500; cursor: pointer; background: transparent; color: #a1a1aa; transition: all 0.15s ease;">🎨 Theme & UI Controls</button>
+              </div>
             </div>
-            <button id="agy-theme-modal-close-btn" type="button" style="background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.1); color: #d4d4d8; cursor: pointer; width: 30px; height: 30px; border-radius: 8px; font-size: 15px; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease;">✕</button>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <button id="agy-kill-restore-btn" type="button" title="Immediately restore default original Antigravity UI and stop theme daemon for this session" style="padding: 5px 11px; border-radius: 8px; background: rgba(245, 158, 11, 0.16); border: 1px solid rgba(245, 158, 11, 0.45); color: #fcd34d; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;">⚡ Restore Original UI</button>
+              <button id="agy-kill-uninstall-btn" type="button" title="Completely kill daemon, unregister sidecar, and restore default Antigravity permanently" style="padding: 5px 11px; border-radius: 8px; background: rgba(239, 68, 68, 0.18); border: 1px solid rgba(239, 68, 68, 0.5); color: #fca5a5; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;">💀 Kill & Uninstall All</button>
+              <button id="agy-theme-modal-close-btn" type="button" style="background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.1); color: #d4d4d8; cursor: pointer; width: 30px; height: 30px; border-radius: 8px; font-size: 15px; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease;">✕</button>
+            </div>
           </div>
           <div id="agy-theme-modal-body" style="flex: 1; overflow-y: auto; height: 100%;"></div>
         </div>
@@ -1161,6 +1178,26 @@
       backdrop.querySelector('#agy-theme-modal-close-btn').addEventListener('click', () => {
         backdrop.style.display = 'none';
       });
+      const killRestoreBtn = backdrop.querySelector('#agy-kill-restore-btn');
+      if (killRestoreBtn) {
+        killRestoreBtn.addEventListener('click', () => {
+          const base = window.__AGY_MEDIA_BASE__ || '';
+          if (base) {
+            fetch(`${base}/api/theme/kill?mode=session`).catch(() => {});
+          }
+          removeCustomTheme();
+        });
+      }
+      const killUninstallBtn = backdrop.querySelector('#agy-kill-uninstall-btn');
+      if (killUninstallBtn) {
+        killUninstallBtn.addEventListener('click', () => {
+          const base = window.__AGY_MEDIA_BASE__ || '';
+          if (base) {
+            fetch(`${base}/api/theme/kill?mode=uninstall`).catch(() => {});
+          }
+          removeCustomTheme();
+        });
+      }
       window.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && backdrop.style.display !== 'none') {
           backdrop.style.display = 'none';
@@ -1180,7 +1217,46 @@
     const effAgentAv = st.agentAvatar === 'none' ? '' : (st.agentAvatar || mainTheme.agentAvatar || '');
 
     container.innerHTML = `
-      <div id="agy-theme-scroll-container" style="padding: 24px 32px 48px 32px; max-width: 860px; margin: 0 auto; overflow-y: auto; height: 100%; color: #f4f4f5;">
+      <div id="agy-view-we" style="display: flex; flex-direction: column; height: 100%; padding: 18px 24px 22px 24px; box-sizing: border-box; color: #f4f4f5;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 16px; margin-bottom: 14px; border-radius: 12px; border: 1px solid ${mainTheme.borderColor}; background: ${mainTheme.cardBg || 'rgba(22, 16, 14, 0.72)'};">
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <div id="agy-we-cat-bar" style="display: flex; align-items: center; gap: 5px; flex-wrap: wrap;">
+              <button type="button" class="agy-we-cat-pill" data-cat="all" style="padding: 4px 10px; border-radius: 9999px; border: 1px solid #f4f4f5; background: rgba(255,255,255,0.16); color: #ffffff; font-size: 12px; font-weight: 600; cursor: pointer;">All</button>
+              <button type="button" class="agy-we-cat-pill" data-cat="video" style="padding: 4px 10px; border-radius: 9999px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.05); color: #d4d4d8; font-size: 12px; cursor: pointer;">Video 60fps</button>
+              <button type="button" class="agy-we-cat-pill" data-cat="scene" style="padding: 4px 10px; border-radius: 9999px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.05); color: #d4d4d8; font-size: 12px; cursor: pointer;">Scene 4K</button>
+              <button type="button" class="agy-we-cat-pill" data-cat="web" style="padding: 4px 10px; border-radius: 9999px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.05); color: #d4d4d8; font-size: 12px; cursor: pointer;">Web</button>
+            </div>
+            <span id="agy-we-status" style="font-size: 12px; color: #a1a1aa; margin-left: 4px;">Scanning Steam Workshop...</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; color: #a1a1aa;">
+              Dim
+              <input id="agy-we-dim-slider" type="range" min="15" max="92" value="${st.dimming}" style="width: 82px; cursor: pointer; accent-color: #ffffff; height: 5px;" />
+              <span id="agy-we-dim-val" style="min-width: 30px; text-align: right;">${st.dimming}%</span>
+            </label>
+            <label title="Auto-pause live video when Antigravity window loses focus to save 100% GPU" style="display: flex; align-items: center; gap: 5px; font-size: 12px; color: #d4d4d8; cursor: pointer;">
+              <input id="agy-we-pause-blur" type="checkbox" ${st.livePauseBlur ? 'checked' : ''} style="accent-color: ${mainTheme.primary}; cursor: pointer;" />
+              Eco Pause
+            </label>
+            <label title="Enable audio track on video wallpapers" style="display: flex; align-items: center; gap: 5px; font-size: 12px; color: #d4d4d8; cursor: pointer;">
+              <input id="agy-we-audio" type="checkbox" ${st.liveAudio ? 'checked' : ''} style="accent-color: ${mainTheme.primary}; cursor: pointer;" />
+              Sound
+            </label>
+            <select id="agy-we-sort" style="background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.16); border-radius: 8px; padding: 5px 8px; color: #f4f4f5; font-size: 12px; cursor: pointer; outline: none;">
+              <option value="newest">Sort: Newest</option>
+              <option value="title">Sort: Name (A–Z)</option>
+            </select>
+            <input id="agy-we-search" type="text" placeholder="Search wallpapers..." style="background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; padding: 5px 11px; color: #f4f4f5; font-size: 12px; width: 175px; outline: none;" />
+            <button id="agy-we-refresh-btn" type="button" title="Rescan Wallpaper Engine folder for newly downloaded wallpapers" style="padding: 5px 10px; border-radius: 8px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16); color: #f4f4f5; font-size: 12px; cursor: pointer; white-space: nowrap;">↻ Refresh</button>
+            <button id="agy-we-off-btn" type="button" style="padding: 5px 10px; border-radius: 8px; background: ${st.liveWp ? 'rgba(239, 68, 68, 0.16)' : 'rgba(255,255,255,0.08)'}; border: 1px solid ${st.liveWp ? 'rgba(239, 68, 68, 0.4)' : 'rgba(255,255,255,0.16)'}; color: ${st.liveWp ? '#fca5a5' : '#d4d4d8'}; font-size: 12px; cursor: pointer; white-space: nowrap;">
+              ${st.liveWp ? 'Stop Live' : 'Static Mode'}
+            </button>
+          </div>
+        </div>
+        <div id="agy-we-grid" style="flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); grid-auto-rows: max-content; gap: 12px; overflow-y: auto; padding-right: 6px;"></div>
+      </div>
+
+      <div id="agy-theme-scroll-container" style="display: none; padding: 24px 32px 48px 32px; max-width: 1100px; margin: 0 auto; overflow-y: auto; height: 100%; box-sizing: border-box; color: #f4f4f5;">
         <div style="border: 1px solid ${mainTheme.borderColor}; background: ${mainTheme.cardBg || 'rgba(22, 16, 14, 0.72)'}; border-radius: 12px; padding: 16px 20px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 12px;">
           <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div>
@@ -1330,31 +1406,6 @@
           </div>
         </div>
 
-        <div style="margin-bottom: 28px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">
-            <div>
-              <div style="font-size: 15px; font-weight: 600; color: #ffffff; margin-bottom: 2px;">Wallpaper Engine (Live Video & Web)</div>
-              <div id="agy-we-status" style="font-size: 12.5px; color: #a1a1aa;">Scanning local Steam Workshop library...</div>
-            </div>
-            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-              <label title="Auto-pause live video when Antigravity window is unfocused to save 100% GPU" style="display: flex; align-items: center; gap: 5px; font-size: 12px; color: #d4d4d8; cursor: pointer;">
-                <input id="agy-we-pause-blur" type="checkbox" ${st.livePauseBlur ? 'checked' : ''} style="accent-color: ${mainTheme.primary}; cursor: pointer;" />
-                Eco Pause
-              </label>
-              <label title="Enable audio track on video wallpapers" style="display: flex; align-items: center; gap: 5px; font-size: 12px; color: #d4d4d8; cursor: pointer;">
-                <input id="agy-we-audio" type="checkbox" ${st.liveAudio ? 'checked' : ''} style="accent-color: ${mainTheme.primary}; cursor: pointer;" />
-                Sound
-              </label>
-              <input id="agy-we-search" type="text" placeholder="Filter live wallpapers..." style="background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.16); border-radius: 8px; padding: 5px 10px; color: #f4f4f5; font-size: 12px; width: 150px; outline: none;" />
-              <button id="agy-we-refresh-btn" type="button" title="Rescan Wallpaper Engine folder for newly downloaded wallpapers" style="padding: 5px 10px; border-radius: 8px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16); color: #f4f4f5; font-size: 12px; cursor: pointer; white-space: nowrap;">↻ Refresh</button>
-              <button id="agy-we-off-btn" type="button" style="padding: 5px 10px; border-radius: 8px; background: ${st.liveWp ? 'rgba(239, 68, 68, 0.16)' : 'rgba(255,255,255,0.08)'}; border: 1px solid ${st.liveWp ? 'rgba(239, 68, 68, 0.4)' : 'rgba(255,255,255,0.16)'}; color: ${st.liveWp ? '#fca5a5' : '#d4d4d8'}; font-size: 12px; cursor: pointer; white-space: nowrap;">
-                ${st.liveWp ? 'Stop Live' : 'Static Mode'}
-              </button>
-            </div>
-          </div>
-          <div id="agy-we-grid" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-height: 290px; overflow-y: auto; padding-right: 4px;"></div>
-        </div>
-
         <div>
           <div style="font-size: 15px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">Theme Presets (${THEME_KEYS.length})</div>
           <div style="font-size: 12.5px; color: #a1a1aa; margin-bottom: 14px;">Complete backdrop, palette, unified L-glass, and matching ornaments.</div>
@@ -1429,13 +1480,43 @@
       });
     }
 
+    const viewWe = container.querySelector('#agy-view-we');
+    const viewStudio = container.querySelector('#agy-theme-scroll-container');
+    const tabWeBtn = document.getElementById('agy-tab-we-btn');
+    const tabStudioBtn = document.getElementById('agy-tab-studio-btn');
+
+    function switchModalTab(tab) {
+      const isWe = tab === 'we';
+      if (viewWe) viewWe.style.display = isWe ? 'flex' : 'none';
+      if (viewStudio) viewStudio.style.display = isWe ? 'none' : 'block';
+      if (tabWeBtn) {
+        tabWeBtn.style.background = isWe ? 'rgba(224, 142, 85, 0.24)' : 'transparent';
+        tabWeBtn.style.color = isWe ? '#ffffff' : '#a1a1aa';
+        tabWeBtn.style.fontWeight = isWe ? '600' : '500';
+      }
+      if (tabStudioBtn) {
+        tabStudioBtn.style.background = !isWe ? 'rgba(224, 142, 85, 0.24)' : 'transparent';
+        tabStudioBtn.style.color = !isWe ? '#ffffff' : '#a1a1aa';
+        tabStudioBtn.style.fontWeight = !isWe ? '600' : '500';
+      }
+    }
+    if (tabWeBtn) tabWeBtn.onclick = () => switchModalTab('we');
+    if (tabStudioBtn) tabStudioBtn.onclick = () => switchModalTab('studio');
+    switchModalTab('we');
+
     const slider = container.querySelector('#agy-dim-slider');
     const valLabel = container.querySelector('#agy-dim-val');
-    slider.addEventListener('input', (e) => {
-      const v = parseInt(e.target.value, 10);
-      valLabel.textContent = v + '%';
+    const weDimSlider = container.querySelector('#agy-we-dim-slider');
+    const weDimVal = container.querySelector('#agy-we-dim-val');
+    function onDimInput(v) {
+      if (slider) slider.value = v;
+      if (valLabel) valLabel.textContent = v + '%';
+      if (weDimSlider) weDimSlider.value = v;
+      if (weDimVal) weDimVal.textContent = v + '%';
       applyTheme({ dimming: v });
-    });
+    }
+    if (slider) slider.addEventListener('input', (e) => onDimInput(parseInt(e.target.value, 10)));
+    if (weDimSlider) weDimSlider.addEventListener('input', (e) => onDimInput(parseInt(e.target.value, 10)));
 
     const wpToggle = container.querySelector('#agy-wp-toggle');
     wpToggle.addEventListener('change', (e) => {
@@ -1663,11 +1744,14 @@
     const weGrid = container.querySelector('#agy-we-grid');
     const weStatus = container.querySelector('#agy-we-status');
     const weSearch = container.querySelector('#agy-we-search');
+    const weSort = container.querySelector('#agy-we-sort');
     const weRefreshBtn = container.querySelector('#agy-we-refresh-btn');
     const weOffBtn = container.querySelector('#agy-we-off-btn');
     const wePauseBlurToggle = container.querySelector('#agy-we-pause-blur');
     const weAudioToggle = container.querySelector('#agy-we-audio');
+    const weCatPills = container.querySelectorAll('.agy-we-cat-pill');
     let weAllItems = [];
+    let weActiveCat = 'all';
 
     if (wePauseBlurToggle) {
       wePauseBlurToggle.addEventListener('change', (e) => {
@@ -1692,28 +1776,84 @@
       weOffBtn.style.color = activeLive ? '#fca5a5' : '#d4d4d8';
     }
 
+    function updateCatPillCounts() {
+      const nAll = weAllItems.length;
+      const nVid = weAllItems.filter(x => x.type === 'video').length;
+      const nScene = weAllItems.filter(x => x.category === 'scene').length;
+      const nWeb = weAllItems.filter(x => x.type === 'web').length;
+      const labels = { all: `All (${nAll})`, video: `Video 60fps (${nVid})`, scene: `Scene 4K (${nScene})`, web: `Web (${nWeb})` };
+      weCatPills.forEach(p => {
+        const c = p.dataset.cat;
+        if (labels[c]) p.textContent = labels[c];
+        const isSel = c === weActiveCat;
+        p.style.border = isSel ? '1px solid #f4f4f5' : '1px solid rgba(255,255,255,0.14)';
+        p.style.background = isSel ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.05)';
+        p.style.color = isSel ? '#ffffff' : '#d4d4d8';
+        p.style.fontWeight = isSel ? '600' : '400';
+      });
+    }
+
+    weCatPills.forEach(pill => {
+      pill.addEventListener('click', () => {
+        weActiveCat = pill.dataset.cat || 'all';
+        updateCatPillCounts();
+        renderWeCards(weSearch ? weSearch.value : '');
+      });
+    });
+
+    if (weSort) {
+      weSort.addEventListener('change', () => renderWeCards(weSearch ? weSearch.value : ''));
+    }
+
     function renderWeCards(filterText) {
       if (!weGrid) return;
       const curLive = getState().liveWp;
       const q = String(filterText || '').trim().toLowerCase();
-      const list = q ? weAllItems.filter(it => it.title.toLowerCase().includes(q) || it.id.includes(q) || it.type.includes(q)) : weAllItems;
+      let list = weAllItems.filter(it => {
+        if (weActiveCat === 'video' && it.type !== 'video') return false;
+        if (weActiveCat === 'scene' && it.category !== 'scene') return false;
+        if (weActiveCat === 'web' && it.type !== 'web') return false;
+        if (q && !it.title.toLowerCase().includes(q) && !it.id.includes(q) && !String(it.category || it.type).includes(q)) return false;
+        return true;
+      });
+
+      const sortMode = weSort ? weSort.value : 'newest';
+      list = list.slice().sort((a, b) => {
+        if (sortMode === 'title') return a.title.localeCompare(b.title);
+        return (b.mtimeMs || 0) - (a.mtimeMs || 0);
+      });
+
       if (!list.length) {
-        weGrid.innerHTML = `<div style="grid-column: 1 / -1; padding: 14px; font-size: 12px; color: #a1a1aa; border: 1px dashed rgba(255,255,255,0.14); border-radius: 10px; text-align: center;">No matching Video / Web wallpapers found.</div>`;
+        weGrid.innerHTML = `<div style="grid-column: 1 / -1; padding: 32px; font-size: 13px; color: #a1a1aa; border: 1px dashed rgba(255,255,255,0.14); border-radius: 12px; text-align: center;">No matching wallpapers found in this category.</div>`;
         return;
       }
       weGrid.innerHTML = list.map(it => {
         const isSel = Boolean(curLive && curLive.id === it.id);
         const prevUrl = it.previewFile ? buildMediaUrl(it.id, it.previewFile) : '';
-        const badgeBg = it.type === 'video' ? 'rgba(56, 189, 248, 0.28)' : 'rgba(168, 85, 247, 0.28)';
-        const badgeColor = it.type === 'video' ? '#7dd3fc' : '#d8b4fe';
+        let badgeText = 'VIDEO';
+        let badgeBg = 'rgba(56, 189, 248, 0.32)';
+        let badgeColor = '#7dd3fc';
+        if (it.category === 'scene-video') {
+          badgeText = 'SCENE 60FPS';
+          badgeBg = 'rgba(16, 185, 129, 0.34)';
+          badgeColor = '#6ee7b7';
+        } else if (it.category === 'scene') {
+          badgeText = 'SCENE 4K';
+          badgeBg = 'rgba(245, 158, 11, 0.32)';
+          badgeColor = '#fcd34d';
+        } else if (it.type === 'web') {
+          badgeText = 'WEB';
+          badgeBg = 'rgba(168, 85, 247, 0.32)';
+          badgeColor = '#d8b4fe';
+        }
         return `
-          <div class="agy-we-card" data-we-id="${escapeHtml(it.id)}" style="border-radius: 10px; border: ${isSel ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)'}; background: rgba(14, 12, 12, 0.84); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: border-color 0.15s ease;">
-            <div style="height: 82px; width: 100%; position: relative; background: #141418 ${prevUrl ? `url('${prevUrl}') center/cover no-repeat` : ''};">
-              <div style="position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.08) 0%, rgba(10,10,14,0.82) 100%);"></div>
-              <span style="position: absolute; top: 6px; left: 6px; font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 2px 6px; border-radius: 9999px; background: ${badgeBg}; color: ${badgeColor}; border: 1px solid rgba(255,255,255,0.14);">${escapeHtml(it.type)}</span>
-              <div class="agy-we-check-slot" style="position: absolute; top: 6px; right: 6px;">${isSel ? CHECK_SVG : ''}</div>
+          <div class="agy-we-card" data-we-id="${escapeHtml(it.id)}" style="border-radius: 11px; border: ${isSel ? '2px solid #fbbf24' : '1px solid rgba(255, 255, 255, 0.12)'}; background: rgba(14, 12, 12, 0.88); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; box-shadow: ${isSel ? '0 0 16px rgba(251, 191, 36, 0.35)' : '0 4px 12px rgba(0,0,0,0.35)'}; transition: transform 0.14s ease, border-color 0.15s ease;">
+            <div style="height: 124px; width: 100%; position: relative; background: #141418 ${prevUrl ? `url('${prevUrl}') center/cover no-repeat` : ''};">
+              <div style="position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.05) 0%, rgba(10,10,14,0.78) 100%);"></div>
+              <span style="position: absolute; top: 7px; left: 7px; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; padding: 2px 7px; border-radius: 9999px; background: ${badgeBg}; color: ${badgeColor}; border: 1px solid rgba(255,255,255,0.16); backdrop-filter: none;">${badgeText}</span>
+              <div class="agy-we-check-slot" style="position: absolute; top: 7px; right: 7px;">${isSel ? CHECK_SVG : ''}</div>
             </div>
-            <div style="padding: 7px 9px; font-size: 11.5px; font-weight: 500; color: #e4e4e7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(it.title)}">${escapeHtml(it.title)}</div>
+            <div style="padding: 9px 11px; font-size: 12.5px; font-weight: 500; color: #f4f4f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(it.title)}">${escapeHtml(it.title)}</div>
           </div>
         `;
       }).join('');
@@ -1753,10 +1893,11 @@
         .then(r => r.json())
         .then(data => {
           weAllItems = Array.isArray(data.items) ? data.items : [];
+          updateCatPillCounts();
           if (weStatus) {
             weStatus.textContent = weAllItems.length
-              ? `Found ${weAllItems.length} playable Video & Web wallpapers (newest first, auto-scans on open/refresh).`
-              : (data.workshopDir ? 'No Video/Web items found in Workshop directory.' : 'Wallpaper Engine Workshop directory not detected.');
+              ? `${weAllItems.length} Workshop wallpapers ready`
+              : (data.workshopDir ? 'No items found in Workshop directory.' : 'Workshop directory not detected.');
           }
           renderWeCards(weSearch ? weSearch.value : '');
         })

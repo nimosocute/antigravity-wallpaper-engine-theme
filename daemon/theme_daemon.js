@@ -108,6 +108,87 @@ function resolveWeWorkshopDir() {
 let weCache = null;
 let weCacheDirMtime = 0;
 
+function inspectScenePkg(pkgPath) {
+    let fd = null;
+    try {
+        const stat = fs.statSync(pkgPath);
+        if (!stat.isFile() || stat.size < 64) return null;
+        fd = fs.openSync(pkgPath, 'r');
+        const hdrBuf = Buffer.alloc(Math.min(65536, stat.size));
+        const hdrRead = fs.readSync(fd, hdrBuf, 0, hdrBuf.length, 0);
+        if (hdrRead < 16) return null;
+
+        let pos = 0;
+        const verLen = hdrBuf.readUInt32LE(pos);
+        pos += 4;
+        if (verLen > 64 || pos + verLen + 4 > hdrRead) return null;
+        pos += verLen;
+        const entryCount = hdrBuf.readUInt32LE(pos);
+        pos += 4;
+        if (entryCount > 5000) return null;
+
+        const entries = [];
+        for (let i = 0; i < entryCount; i++) {
+            if (pos + 4 > hdrRead) return null;
+            const nameLen = hdrBuf.readUInt32LE(pos);
+            pos += 4;
+            if (nameLen > 512 || pos + nameLen + 8 > hdrRead) return null;
+            const name = hdrBuf.toString('utf8', pos, pos + nameLen);
+            pos += nameLen;
+            const ofs = hdrBuf.readUInt32LE(pos);
+            const sz = hdrBuf.readUInt32LE(pos + 4);
+            pos += 8;
+            entries.push({ name, ofs, sz });
+        }
+
+        const dataBase = pos;
+        entries.sort((a, b) => b.sz - a.sz);
+        const peekBuf = Buffer.alloc(4096);
+        const pngMagic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        const jpgMagic = Buffer.from([0xff, 0xd8, 0xff]);
+        const ftypMagic = Buffer.from('ftyp', 'ascii');
+
+        for (const e of entries.slice(0, 12)) {
+            if (e.sz < 25000) continue;
+            const absStart = dataBase + e.ofs;
+            if (absStart >= stat.size) continue;
+            const toRead = Math.min(peekBuf.length, e.sz, stat.size - absStart);
+            const r = fs.readSync(fd, peekBuf, 0, toRead, absStart);
+            const slice = peekBuf.subarray(0, r);
+
+            const ftypIdx = slice.indexOf(ftypMagic);
+            if (ftypIdx >= 4 && ftypIdx < 256) {
+                const startOfs = absStart + ftypIdx - 4;
+                const len = Math.min(e.sz - (ftypIdx - 4), stat.size - startOfs);
+                return { mediaKind: 'video', mime: 'video/mp4', offset: startOfs, length: len };
+            }
+
+            const pngIdx = slice.indexOf(pngMagic);
+            if (pngIdx !== -1) {
+                const startOfs = absStart + pngIdx;
+                const len = Math.min(e.sz - pngIdx, stat.size - startOfs);
+                return { mediaKind: 'image', mime: 'image/png', offset: startOfs, length: len };
+            }
+
+            const jpgIdx = slice.indexOf(jpgMagic);
+            if (jpgIdx !== -1) {
+                const startOfs = absStart + jpgIdx;
+                const len = Math.min(e.sz - jpgIdx, stat.size - startOfs);
+                return { mediaKind: 'image', mime: 'image/jpeg', offset: startOfs, length: len };
+            }
+        }
+        return null;
+    } catch (_) {
+        return null;
+    } finally {
+        if (fd !== null) {
+            try {
+                fs.closeSync(fd);
+            } catch (_) {}
+        }
+    }
+}
+
 function scanWallpaperEngineItems(forceRefresh = false) {
     const wsDir = resolveWeWorkshopDir();
     if (!wsDir) return { workshopDir: null, items: [] };
@@ -137,16 +218,12 @@ function scanWallpaperEngineItems(forceRefresh = false) {
         try {
             const raw = fs.readFileSync(pjPath, 'utf8').replace(/^\uFEFF/, '');
             const data = JSON.parse(raw);
-            const type = String(data.type || '').toLowerCase();
-            if (type !== 'video' && type !== 'web') continue;
-            const relFile = String(data.file || '').replace(/\\/g, '/');
-            if (!relFile) continue;
-            const fullFile = path.resolve(itemDir, relFile);
-            if (!fullFile.startsWith(itemDir) || !fs.existsSync(fullFile)) continue;
+            const rawType = String(data.type || 'scene').toLowerCase();
+            if (rawType !== 'video' && rawType !== 'web' && rawType !== 'scene') continue;
 
             let previewFile = String(data.preview || '').replace(/\\/g, '/');
             if (!previewFile || !fs.existsSync(path.resolve(itemDir, previewFile))) {
-                const fallback = ['preview.jpg', 'preview.gif', 'preview.png', 'preview.webp'].find((f) =>
+                const fallback = ['preview.gif', 'preview.jpg', 'preview.png', 'preview.webp'].find((f) =>
                     fs.existsSync(path.join(itemDir, f))
                 );
                 previewFile = fallback || '';
@@ -154,25 +231,59 @@ function scanWallpaperEngineItems(forceRefresh = false) {
 
             let mtimeMs = 0;
             try {
-                mtimeMs = Math.max(fs.statSync(itemDir).mtimeMs, fs.statSync(fullFile).mtimeMs);
+                mtimeMs = fs.statSync(itemDir).mtimeMs;
             } catch (_) {}
 
-            items.push({
-                id,
-                type,
-                title: String(data.title || id).trim(),
-                relFile,
-                previewFile,
-                mtimeMs,
-            });
+            if (rawType === 'video' || rawType === 'web') {
+                const relFile = String(data.file || '').replace(/\\/g, '/');
+                if (!relFile) continue;
+                const fullFile = path.resolve(itemDir, relFile);
+                if (!fullFile.startsWith(itemDir) || !fs.existsSync(fullFile)) continue;
+                try {
+                    mtimeMs = Math.max(mtimeMs, fs.statSync(fullFile).mtimeMs);
+                } catch (_) {}
+                items.push({
+                    id,
+                    type: rawType,
+                    category: rawType,
+                    title: String(data.title || id).trim(),
+                    relFile,
+                    previewFile,
+                    mtimeMs,
+                });
+            } else {
+                const pkgPath = path.join(itemDir, 'scene.pkg');
+                const pkgInfo = fs.existsSync(pkgPath) ? inspectScenePkg(pkgPath) : null;
+                if (pkgInfo) {
+                    try {
+                        mtimeMs = Math.max(mtimeMs, fs.statSync(pkgPath).mtimeMs);
+                    } catch (_) {}
+                    items.push({
+                        id,
+                        type: pkgInfo.mediaKind === 'video' ? 'video' : 'image',
+                        category: pkgInfo.mediaKind === 'video' ? 'scene-video' : 'scene',
+                        title: String(data.title || id).trim(),
+                        relFile: `__pkg__`,
+                        previewFile,
+                        pkgSlice: pkgInfo,
+                        mtimeMs,
+                    });
+                } else if (previewFile) {
+                    items.push({
+                        id,
+                        type: 'image',
+                        category: 'scene',
+                        title: String(data.title || id).trim(),
+                        relFile: previewFile,
+                        previewFile,
+                        mtimeMs,
+                    });
+                }
+            }
         } catch (_) {}
     }
 
-    items.sort((a, b) => {
-        if ((b.mtimeMs || 0) !== (a.mtimeMs || 0)) return (b.mtimeMs || 0) - (a.mtimeMs || 0);
-        if (a.type !== b.type) return a.type === 'video' ? -1 : 1;
-        return a.title.localeCompare(b.title);
-    });
+    items.sort((a, b) => (b.mtimeMs || 0) - (a.mtimeMs || 0));
 
     weCache = { workshopDir: wsDir, items };
     return weCache;
@@ -203,6 +314,22 @@ function startMediaServer() {
             return;
         }
 
+        if (pathname === '/api/theme/kill') {
+            const mode = parsedUrl.searchParams.get('mode') || 'session';
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, mode }));
+            setTimeout(() => {
+                if (mode === 'uninstall') {
+                    const pluginDir = path.join(os.homedir(), '.gemini', 'config', 'plugins', 'antigravity-custom-theme-plugin');
+                    try {
+                        if (fs.existsSync(pluginDir)) fs.rmSync(pluginDir, { recursive: true, force: true });
+                    } catch (_) {}
+                }
+                shutdown(`User requested kill (${mode})`);
+            }, 150);
+            return;
+        }
+
         if (pathname.startsWith('/we/')) {
             const wsDir = resolveWeWorkshopDir();
             if (!wsDir) {
@@ -229,6 +356,64 @@ function startMediaServer() {
             } catch (_) {
                 res.writeHead(400);
                 res.end('Invalid encoding');
+                return;
+            }
+
+            if (relPath === '__pkg__') {
+                const catalog = scanWallpaperEngineItems(false);
+                const found = catalog.items.find((x) => x.id === id && x.pkgSlice);
+                const pkgPath = path.join(wsDir, id, 'scene.pkg');
+                if (!found || !fs.existsSync(pkgPath)) {
+                    res.writeHead(404);
+                    res.end('PKG slice not found');
+                    return;
+                }
+                const sliceOffset = found.pkgSlice.offset;
+                const total = found.pkgSlice.length;
+                const contentType = found.pkgSlice.mime || 'application/octet-stream';
+                const range = req.headers.range;
+                if (range) {
+                    const match = String(range).match(/bytes=(\d*)-(\d*)/);
+                    if (match) {
+                        const start = match[1] ? parseInt(match[1], 10) : 0;
+                        const end = match[2] ? Math.min(parseInt(match[2], 10), total - 1) : total - 1;
+                        if (start >= total || start > end) {
+                            res.writeHead(416, { 'Content-Range': `bytes */${total}` });
+                            res.end();
+                            return;
+                        }
+                        res.writeHead(206, {
+                            'Content-Range': `bytes ${start}-${end}/${total}`,
+                            'Accept-Ranges': 'bytes',
+                            'Content-Length': end - start + 1,
+                            'Content-Type': contentType,
+                            'Cache-Control': 'public, max-age=3600',
+                        });
+                        if (req.method === 'HEAD') {
+                            res.end();
+                            return;
+                        }
+                        const stream = fs.createReadStream(pkgPath, { start: sliceOffset + start, end: sliceOffset + end });
+                        res.on('close', () => stream.destroy());
+                        stream.on('error', () => res.destroy());
+                        stream.pipe(res);
+                        return;
+                    }
+                }
+                res.writeHead(200, {
+                    'Accept-Ranges': 'bytes',
+                    'Content-Length': total,
+                    'Content-Type': contentType,
+                    'Cache-Control': 'public, max-age=3600',
+                });
+                if (req.method === 'HEAD') {
+                    res.end();
+                    return;
+                }
+                const stream = fs.createReadStream(pkgPath, { start: sliceOffset, end: sliceOffset + total - 1 });
+                res.on('close', () => stream.destroy());
+                stream.on('error', () => res.destroy());
+                stream.pipe(res);
                 return;
             }
 
