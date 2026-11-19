@@ -172,20 +172,62 @@ def cloak_agy_bg_window(hwnd: int) -> None:
     user32.SetWindowPos(hwnd, 1, 0, 0, 1920, 1080, 0x0010 | 0x0020 | 0x0040)
 
 
-def format_raw_properties(props_json: str) -> str:
-    if not props_json:
-        return ""
+def hex_to_we_color(hex_str: str) -> str:
+    s = str(hex_str or "").strip().lstrip("#")
+    if len(s) == 6:
+        try:
+            r = int(s[0:2], 16) / 255.0
+            g = int(s[2:4], 16) / 255.0
+            b = int(s[4:6], 16) / 255.0
+            return f"{r:.5f} {g:.5f} {b:.5f}"
+        except Exception:
+            pass
+    return "0.15 0.15 0.18"
+
+
+def apply_properties_to_project_json(item_dir: Path, props_json: str) -> bool:
+    """
+    Preserves a pristine backup of project.json in .agy_orig_project.json, applies any
+    user property overrides (custom project.json properties, __audioprocessing, __schemecolor)
+    into project.json, and returns True if project.json changed on disk.
+    """
+    pj_path = item_dir / "project.json"
+    orig_path = item_dir / ".agy_orig_project.json"
+    if not pj_path.is_file():
+        return False
+
     try:
-        obj = json.loads(props_json)
-        if not isinstance(obj, dict) or not obj:
-            return ""
-        inner = json.dumps(obj, ensure_ascii=False)
-        if inner.startswith("{") and inner.endswith("}"):
-            inner = "(" + inner[1:-1] + ")"
-        escaped = inner.replace('"', '\\"')
-        return f' -properties "RAW~{escaped}~END"'
+        if not orig_path.is_file():
+            orig_path.write_bytes(pj_path.read_bytes())
+
+        base_raw = orig_path.read_text(encoding="utf-8-sig")
+        pj = json.loads(base_raw)
+        general = pj.setdefault("general", {})
+        props_dict = general.setdefault("properties", {})
+
+        if props_json:
+            overrides = json.loads(props_json)
+            if isinstance(overrides, dict):
+                for k, v in overrides.items():
+                    if k == "__audioprocessing":
+                        general["supportsaudioprocessing"] = bool(v)
+                    elif k == "__schemecolor" and isinstance(v, str):
+                        sc = props_dict.setdefault(
+                            "schemecolor",
+                            {"order": 0, "text": "ui_browse_properties_scheme_color", "type": "color"},
+                        )
+                        sc["value"] = hex_to_we_color(v) if v.startswith("#") else v
+                    elif k in props_dict and isinstance(props_dict[k], dict):
+                        props_dict[k]["value"] = v
+
+        new_text = json.dumps(pj, ensure_ascii=False, indent="\t")
+        old_text = pj_path.read_text(encoding="utf-8-sig")
+        if new_text != old_text:
+            pj_path.write_text(new_text, encoding="utf-8")
+            return True
     except Exception:
-        return ""
+        pass
+    return False
 
 
 def main() -> None:
@@ -214,10 +256,13 @@ def main() -> None:
 
     ensure_unpaused_when_maximized(we_dir)
 
-    project_json = ws_dir / action / "project.json"
+    item_dir = ws_dir / action
+    project_json = item_dir / "project.json"
     if not project_json.is_file():
         print(json.dumps({"ok": False, "error": f"project.json not found: {project_json}"}))
         return
+
+    pj_changed = apply_properties_to_project_json(item_dir, props_json)
 
     if not is_we_running():
         spawn_on_default_desktop(f'"{exe}"', str(we_dir))
@@ -226,10 +271,18 @@ def main() -> None:
             if is_we_running():
                 break
 
-    props_arg = format_raw_properties(props_json)
+    existing_hwnd = find_agy_bg_window()
+    if existing_hwnd and (pj_changed or props_json):
+        # Force wallpaper64.exe to reload the updated project.json properties into AGY_BG
+        close_agy_bg_window()
+        for _ in range(15):
+            time.sleep(0.08)
+            if not find_agy_bg_window():
+                break
+
     cmd = (
         f'"{exe}" -control openWallpaper -file "{project_json}" '
-        f'-playInWindow "AGY_BG" -width 1920 -height 1080 -borderless{props_arg}'
+        f'-playInWindow "AGY_BG" -width 1920 -height 1080 -borderless'
     )
     spawn_on_default_desktop(cmd, str(we_dir))
     time.sleep(0.35)

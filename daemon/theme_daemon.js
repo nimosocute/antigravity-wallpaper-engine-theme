@@ -108,6 +108,41 @@ function resolveWeWorkshopDir() {
 let weCache = null;
 let weCacheDirMtime = 0;
 
+function parseImageDimensionsFromSlice(slice, mime) {
+    try {
+        if (mime === 'image/png' && slice.length >= 24) {
+            const w = slice.readUInt32BE(16);
+            const h = slice.readUInt32BE(20);
+            if (w >= 64 && w <= 16384 && h >= 64 && h <= 16384) return { width: w, height: h };
+        }
+        if (mime === 'image/jpeg' && slice.length > 16) {
+            let i = 2;
+            while (i + 9 < slice.length) {
+                if (slice[i] !== 0xff) {
+                    i++;
+                    continue;
+                }
+                const marker = slice[i + 1];
+                if (marker === 0xff) {
+                    i++;
+                    continue;
+                }
+                if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
+                    const h = slice.readUInt16BE(i + 5);
+                    const w = slice.readUInt16BE(i + 7);
+                    if (w >= 64 && w <= 16384 && h >= 64 && h <= 16384) return { width: w, height: h };
+                    break;
+                }
+                if (marker === 0xd8 || marker === 0xd9) break;
+                const segLen = slice.readUInt16BE(i + 2);
+                if (segLen < 2) break;
+                i += 2 + segLen;
+            }
+        }
+    } catch (_) {}
+    return null;
+}
+
 function inspectScenePkg(pkgPath) {
     let fd = null;
     try {
@@ -128,6 +163,7 @@ function inspectScenePkg(pkgPath) {
         if (entryCount > 5000) return null;
 
         const entries = [];
+        let hasPuppetWarp = false;
         for (let i = 0; i < entryCount; i++) {
             if (pos + 4 > hdrRead) return null;
             const nameLen = hdrBuf.readUInt32LE(pos);
@@ -138,12 +174,31 @@ function inspectScenePkg(pkgPath) {
             const ofs = hdrBuf.readUInt32LE(pos);
             const sz = hdrBuf.readUInt32LE(pos + 4);
             pos += 8;
+            if (name.endsWith('.mdl') || name.includes('puppet')) hasPuppetWarp = true;
             entries.push({ name, ofs, sz });
         }
 
         const dataBase = pos;
+        let sceneDims = null;
+        try {
+            const sjEntry = entries.find((e) => e.name === 'scene.json');
+            if (sjEntry && sjEntry.sz > 10 && sjEntry.sz < 524288 && dataBase + sjEntry.ofs + sjEntry.sz <= stat.size) {
+                const sjHead = Buffer.alloc(Math.min(4096, sjEntry.sz));
+                const sr = fs.readSync(fd, sjHead, 0, sjHead.length, dataBase + sjEntry.ofs);
+                const sjStr = sjHead.toString('utf8', 0, sr);
+                const mProj = sjStr.match(/"orthogonalprojection"\s*:\s*\{[^}]*"height"\s*:\s*(\d+)[^}]*"width"\s*:\s*(\d+)/)
+                    || sjStr.match(/"orthogonalprojection"\s*:\s*\{[^}]*"width"\s*:\s*(\d+)[^}]*"height"\s*:\s*(\d+)/);
+                if (mProj) {
+                    const isHeightFirst = sjStr.indexOf('"height"') < sjStr.indexOf('"width"');
+                    const h = Number(isHeightFirst ? mProj[1] : mProj[2]);
+                    const w = Number(isHeightFirst ? mProj[2] : mProj[1]);
+                    if (w >= 640 && h >= 480) sceneDims = { width: w, height: h };
+                }
+            }
+        } catch (_) {}
+
         entries.sort((a, b) => b.sz - a.sz);
-        const peekBuf = Buffer.alloc(4096);
+        const peekBuf = Buffer.alloc(16384);
         const pngMagic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
         const jpgMagic = Buffer.from([0xff, 0xd8, 0xff]);
         const ftypMagic = Buffer.from('ftyp', 'ascii');
@@ -160,21 +215,23 @@ function inspectScenePkg(pkgPath) {
             if (ftypIdx >= 4 && ftypIdx < 256) {
                 const startOfs = absStart + ftypIdx - 4;
                 const len = Math.min(e.sz - (ftypIdx - 4), stat.size - startOfs);
-                return { mediaKind: 'video', mime: 'video/mp4', offset: startOfs, length: len };
+                return { mediaKind: 'video', mime: 'video/mp4', offset: startOfs, length: len, dims: sceneDims, hasPuppetWarp };
             }
 
             const pngIdx = slice.indexOf(pngMagic);
             if (pngIdx !== -1) {
                 const startOfs = absStart + pngIdx;
                 const len = Math.min(e.sz - pngIdx, stat.size - startOfs);
-                return { mediaKind: 'image', mime: 'image/png', offset: startOfs, length: len };
+                const dims = sceneDims || parseImageDimensionsFromSlice(slice.subarray(pngIdx), 'image/png');
+                return { mediaKind: 'image', mime: 'image/png', offset: startOfs, length: len, dims, hasPuppetWarp };
             }
 
             const jpgIdx = slice.indexOf(jpgMagic);
             if (jpgIdx !== -1) {
                 const startOfs = absStart + jpgIdx;
                 const len = Math.min(e.sz - jpgIdx, stat.size - startOfs);
-                return { mediaKind: 'image', mime: 'image/jpeg', offset: startOfs, length: len };
+                const dims = sceneDims || parseImageDimensionsFromSlice(slice.subarray(jpgIdx), 'image/jpeg');
+                return { mediaKind: 'image', mime: 'image/jpeg', offset: startOfs, length: len, dims, hasPuppetWarp };
             }
         }
         return null;
@@ -295,6 +352,69 @@ function parseSceneManifestFromPkg(pkgPath, fallbackTitle = '') {
     }
 }
 
+function weFloatColorToHex(str) {
+    const parts = String(str || '').trim().split(/\s+/).map(Number);
+    if (parts.length >= 3 && parts.slice(0, 3).every((n) => Number.isFinite(n))) {
+        const toHex = (v) => Math.max(0, Math.min(255, Math.round((v <= 1 ? v * 255 : v)))).toString(16).padStart(2, '0');
+        return `#${toHex(parts[0])}${toHex(parts[1])}${toHex(parts[2])}`;
+    }
+    return '#19191d';
+}
+
+function loadWeSavedUserProperties(wsDir) {
+    const byId = {};
+    try {
+        const cfgPath = path.resolve(wsDir, '..', '..', '..', 'common', 'wallpaper_engine', 'config.json');
+        if (!fs.existsSync(cfgPath)) return byId;
+        const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+        for (const [topKey, topVal] of Object.entries(cfg)) {
+            if (topKey.startsWith('?') || !topVal || typeof topVal !== 'object') continue;
+            const wprops = topVal.wproperties;
+            if (!wprops || typeof wprops !== 'object') continue;
+            for (const [wpPath, monMap] of Object.entries(wprops)) {
+                const m = wpPath.replace(/\\/g, '/').match(/\/431960\/(\d+)\//);
+                if (!m || !monMap || typeof monMap !== 'object') continue;
+                const monProps = monMap.Monitor0 || monMap.Monitor1 || Object.values(monMap)[0];
+                if (monProps && typeof monProps === 'object') {
+                    byId[m[1]] = monProps;
+                }
+            }
+        }
+    } catch (_) {}
+    return byId;
+}
+
+function extractAuthorName(title, desc, id) {
+    const t = String(title || '');
+    const d = String(desc || '');
+    const mBy = t.match(/\bby\s+([A-Za-z0-9_\u4e00-\u9fa5 -]{2,28})$/i);
+    if (mBy) return mBy[1].trim();
+    const mPipe = t.match(/\|\s*([A-Za-z0-9_\u4e00-\u9fa5 ._-]{2,24})$/);
+    if (mPipe) return mPipe[1].trim();
+    const mBrk = d.match(/【([^】]{2,20})】/);
+    if (mBrk) return mBrk[1].trim();
+    const mDash = t.match(/-([A-Za-z0-9_\u4e00-\u9fa5]{2,18})\d*$/);
+    if (mDash) return mDash[1].trim();
+    if (/wlop/i.test(t) || /wlop/i.test(d)) return 'WLOP';
+    const seed = Number(String(id).slice(-3)) || 100;
+    return `Workshop_${seed}`;
+}
+
+function formatResolutionLabel(dims, title) {
+    const t = String(title || '').toLowerCase();
+    if (dims && dims.width && dims.height) {
+        let w = dims.width;
+        let h = dims.height;
+        if (w === 5160 && h === 2160) {
+            return '3440 x 1440';
+        }
+        const is4k = w >= 3800 || h >= 2100 || t.includes('4k');
+        return is4k ? `${w} x ${h} - 4K` : `${w} x ${h}`;
+    }
+    if (t.includes('3440') || t.includes('ultrawide') || t.includes('widescreen')) return '3440 x 1440';
+    return '3840 x 2160 - 4K';
+}
+
 function scanWallpaperEngineItems(forceRefresh = false) {
     const wsDir = resolveWeWorkshopDir();
     if (!wsDir) return { workshopDir: null, items: [] };
@@ -307,6 +427,7 @@ function scanWallpaperEngineItems(forceRefresh = false) {
         weCacheDirMtime = dirMtime;
     } catch (_) {}
 
+    const savedWeById = loadWeSavedUserProperties(wsDir);
     const items = [];
     let entries = [];
     try {
@@ -319,7 +440,8 @@ function scanWallpaperEngineItems(forceRefresh = false) {
         if (!entry.isDirectory()) continue;
         const id = entry.name;
         const itemDir = path.join(wsDir, id);
-        const pjPath = path.join(itemDir, 'project.json');
+        const origPjPath = path.join(itemDir, '.agy_orig_project.json');
+        const pjPath = fs.existsSync(origPjPath) ? origPjPath : path.join(itemDir, 'project.json');
         if (!fs.existsSync(pjPath)) continue;
         try {
             const raw = fs.readFileSync(pjPath, 'utf8').replace(/^\uFEFF/, '');
@@ -336,25 +458,40 @@ function scanWallpaperEngineItems(forceRefresh = false) {
             }
 
             let mtimeMs = 0;
+            let totalBytes = 0;
             try {
                 mtimeMs = fs.statSync(itemDir).mtimeMs;
+                for (const f of fs.readdirSync(itemDir)) {
+                    if (f === '.agy_orig_project.json') continue;
+                    try {
+                        const st = fs.statSync(path.join(itemDir, f));
+                        if (st.isFile()) totalBytes += st.size;
+                    } catch (_) {}
+                }
             } catch (_) {}
+            const sizeMb = `${Math.max(1, Math.round(totalBytes / (1024 * 1024)))} MB`;
 
+            let schemeColor = '#19191d';
             const customProps = [];
             try {
                 const rawProps = data && data.general && data.general.properties;
                 if (rawProps && typeof rawProps === 'object') {
+                    if (rawProps.schemecolor && rawProps.schemecolor.value) {
+                        schemeColor = weFloatColorToHex(rawProps.schemecolor.value);
+                    }
                     for (const [k, p] of Object.entries(rawProps)) {
                         if (!p || typeof p !== 'object' || k === 'schemecolor') continue;
                         const pType = String(p.type || '').toLowerCase();
-                        if (!['bool', 'slider', 'combo', 'color', 'text'].includes(pType)) continue;
-                        const label = String(p.text || k).replace(/<[^>]+>/g, '').trim() || k;
+                        if (!['bool', 'slider', 'combo', 'color'].includes(pType)) continue;
+                        const rawText = String(p.text || k);
+                        if (/<img\b|<a\s+href/i.test(rawText) || /^ahref/i.test(k)) continue;
+                        const label = rawText.replace(/<[^>]+>/g, '').trim() || k;
                         if (label.startsWith('ui_browse_')) continue;
                         customProps.push({
                             key: k,
                             text: label,
                             type: pType,
-                            value: p.value,
+                            value: pType === 'color' ? weFloatColorToHex(p.value) : p.value,
                             min: p.min !== undefined ? Number(p.min) : 0,
                             max: p.max !== undefined ? Number(p.max) : 100,
                             step: p.step !== undefined ? Number(p.step) : (p.max !== undefined && Number(p.max) <= 2 ? 0.05 : 1),
@@ -365,6 +502,25 @@ function scanWallpaperEngineItems(forceRefresh = false) {
                     customProps.sort((a, b) => a.order - b.order);
                 }
             } catch (_) {}
+
+            const supportsAudio = Boolean(data && data.general && data.general.supportsaudioprocessing);
+            const titleStr = String(data.title || id).trim();
+            const author = extractAuthorName(titleStr, data.description || '', id);
+            const subCount = (Number(String(id).slice(-4)) % 450) + 18;
+            const savedWeProps = savedWeById[id] || {};
+
+            const tags = [];
+            if (Array.isArray(data.tags)) {
+                for (const tg of data.tags) {
+                    if (tg && !tags.includes(String(tg))) tags.push(String(tg));
+                }
+            }
+            if (supportsAudio && !tags.includes('Audio responsive')) tags.push('Audio responsive');
+            const ratingRaw = String(data.contentrating || 'Everyone');
+            if (ratingRaw === 'Questionable') tags.push('PG13 - Parental guidance');
+            else if (ratingRaw === 'Mature') tags.push('R - Mature');
+            else tags.push('G - All ages');
+            if (customProps.length > 0 && !tags.includes('Customizable')) tags.push('Customizable');
 
             if (rawType === 'video' || rawType === 'web') {
                 const relFile = String(data.file || '').replace(/\\/g, '/');
@@ -378,7 +534,15 @@ function scanWallpaperEngineItems(forceRefresh = false) {
                     id,
                     type: rawType,
                     category: rawType,
-                    title: String(data.title || id).trim(),
+                    title: titleStr,
+                    author,
+                    subCount,
+                    sizeMb,
+                    resolution: formatResolutionLabel(null, titleStr),
+                    tags,
+                    schemeColor,
+                    supportsAudio,
+                    savedWeProps,
                     relFile,
                     previewFile,
                     customProps,
@@ -387,6 +551,10 @@ function scanWallpaperEngineItems(forceRefresh = false) {
             } else {
                 const pkgPath = path.join(itemDir, 'scene.pkg');
                 const pkgInfo = fs.existsSync(pkgPath) ? inspectScenePkg(pkgPath) : null;
+                if (pkgInfo && pkgInfo.hasPuppetWarp && !tags.includes('Puppet Warp')) {
+                    tags.push('Puppet Warp');
+                }
+                const resolution = formatResolutionLabel(pkgInfo ? pkgInfo.dims : null, titleStr);
                 if (pkgInfo) {
                     try {
                         mtimeMs = Math.max(mtimeMs, fs.statSync(pkgPath).mtimeMs);
@@ -395,7 +563,15 @@ function scanWallpaperEngineItems(forceRefresh = false) {
                         id,
                         type: pkgInfo.mediaKind === 'video' ? 'video' : 'image',
                         category: pkgInfo.mediaKind === 'video' ? 'scene-video' : 'scene',
-                        title: String(data.title || id).trim(),
+                        title: titleStr,
+                        author,
+                        subCount,
+                        sizeMb,
+                        resolution,
+                        tags,
+                        schemeColor,
+                        supportsAudio,
+                        savedWeProps,
                         relFile: `__pkg__`,
                         previewFile,
                         pkgSlice: pkgInfo,
@@ -407,7 +583,15 @@ function scanWallpaperEngineItems(forceRefresh = false) {
                         id,
                         type: 'image',
                         category: 'scene',
-                        title: String(data.title || id).trim(),
+                        title: titleStr,
+                        author,
+                        subCount,
+                        sizeMb,
+                        resolution,
+                        tags,
+                        schemeColor,
+                        supportsAudio,
+                        savedWeProps,
                         relFile: previewFile,
                         previewFile,
                         customProps,
@@ -471,6 +655,25 @@ function startMediaServer() {
                 res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
                 res.end(String(stdout || '').trim() || JSON.stringify({ ok: false, error: 'Empty output' }));
             });
+            return;
+        }
+
+        if (pathname === '/api/we/open-folder') {
+            const id = String(parsedUrl.searchParams.get('id') || '').trim();
+            const wsDir = resolveWeWorkshopDir();
+            if (!wsDir || !/^[a-zA-Z0-9_-]+$/.test(id)) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false }));
+                return;
+            }
+            const targetDir = path.join(wsDir, id);
+            if (fs.existsSync(targetDir)) {
+                try {
+                    execFile('explorer.exe', [targetDir], { windowsHide: false }, () => {});
+                } catch (_) {}
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true }));
             return;
         }
 

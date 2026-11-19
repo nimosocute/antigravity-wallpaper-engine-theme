@@ -475,7 +475,10 @@
 
     const isDx11Scene = live.category === 'scene' || live.type === 'image';
     const wpCfg = (live && live.settings && typeof live.settings === 'object') ? live.settings : {};
-    const customValsJson = JSON.stringify(wpCfg.customValues || {});
+    const dxPropsObj = { ...(wpCfg.customValues || {}) };
+    if (wpCfg.audioRecording !== undefined) dxPropsObj.__audioprocessing = Boolean(wpCfg.audioRecording);
+    if (wpCfg.schemeColor) dxPropsObj.__schemecolor = String(wpCfg.schemeColor);
+    const customValsJson = JSON.stringify(dxPropsObj);
     const mediaKey = `${live.category || live.type}|${live.id}|${mediaUrl}|${isDx11Scene ? customValsJson : ''}`;
     if (layer.dataset.mediaKey !== mediaKey) {
       stopStandaloneSceneEngine();
@@ -503,8 +506,8 @@
         const base = window.__AGY_MEDIA_BASE__ || '';
         const reqKey = mediaKey;
         if (base && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
-          const propsParam = wpCfg.customValues && Object.keys(wpCfg.customValues).length
-            ? `&props=${encodeURIComponent(JSON.stringify(wpCfg.customValues))}`
+          const propsParam = Object.keys(dxPropsObj).length
+            ? `&props=${encodeURIComponent(customValsJson)}`
             : '';
           fetch(`${base}/api/we/activate-scene?id=${encodeURIComponent(live.id)}${propsParam}&_t=${Date.now()}`)
             .then(r => r.json())
@@ -584,20 +587,55 @@
     const posY = wpCfg.posY !== undefined ? Number(wpCfg.posY) : 50;
     const flipH = Boolean(wpCfg.flip);
     const speedPct = wpCfg.speed !== undefined ? Number(wpCfg.speed) : 100;
-    const brs = wpCfg.brightness !== undefined ? Number(wpCfg.brightness) : 100;
-    const con = wpCfg.contrast !== undefined ? Number(wpCfg.contrast) : 100;
-    const sat = wpCfg.saturate !== undefined ? Number(wpCfg.saturate) : 100;
-    const hue = wpCfg.hue !== undefined ? Number(wpCfg.hue) : 0;
-    const filterCss = (brs !== 100 || con !== 100 || sat !== 100 || hue !== 0)
-      ? `brightness(${brs}%) contrast(${con}%) saturate(${sat}%) hue-rotate(${hue}deg)`
-      : 'none';
+    const volPct = wpCfg.volume !== undefined ? Number(wpCfg.volume) : 68;
+    const mouseParallax = wpCfg.mouseParallax !== undefined ? Boolean(wpCfg.mouseParallax) : true;
+    const imgFilter = wpCfg.imageFilter || 'none';
+    const showCol = Boolean(wpCfg.showColor);
+    const brs = showCol && wpCfg.brightness !== undefined ? Number(wpCfg.brightness) : 100;
+    const con = showCol && wpCfg.contrast !== undefined ? Number(wpCfg.contrast) : 100;
+    const sat = showCol && wpCfg.saturate !== undefined ? Number(wpCfg.saturate) : 100;
+    const hue = showCol && wpCfg.hue !== undefined ? Number(wpCfg.hue) : 0;
+
+    const filterParts = [];
+    if (brs !== 100) filterParts.push(`brightness(${brs}%)`);
+    if (con !== 100) filterParts.push(`contrast(${con}%)`);
+    if (sat !== 100) filterParts.push(`saturate(${sat}%)`);
+    if (hue !== 0) filterParts.push(`hue-rotate(${hue}deg)`);
+    if (imgFilter === 'sepia') filterParts.push('sepia(82%)');
+    else if (imgFilter === 'grayscale') filterParts.push('grayscale(100%)');
+    else if (imgFilter === 'invert') filterParts.push('invert(100%)');
+    else if (imgFilter === 'crt') filterParts.push('contrast(118%) saturate(130%) brightness(94%)');
+    const filterCss = filterParts.length ? filterParts.join(' ') : 'none';
+
+    window.__AGY_WE_PARALLAX_ON__ = mouseParallax;
+    window.__AGY_WE_FLIP_H__ = flipH;
+    if (!window.__AGY_WE_PARALLAX_BOUND__) {
+      window.__AGY_WE_PARALLAX_BOUND__ = true;
+      window.addEventListener('mousemove', (ev) => {
+        const el = document.querySelector('#agy-live-wp-layer > #agy-live-wp-video, #agy-live-wp-layer > #agy-live-wp-webgl, #agy-live-wp-layer > #agy-live-wp-web');
+        if (!el) return;
+        const sx = window.__AGY_WE_FLIP_H__ ? -1 : 1;
+        if (!window.__AGY_WE_PARALLAX_ON__) {
+          el.style.transform = sx === -1 ? 'scaleX(-1)' : 'none';
+          return;
+        }
+        const nx = (ev.clientX / Math.max(1, window.innerWidth)) - 0.5;
+        const ny = (ev.clientY / Math.max(1, window.innerHeight)) - 0.5;
+        const tx = (-nx * 14).toFixed(1);
+        const ty = (-ny * 10).toFixed(1);
+        el.style.transform = `scale(${1.022 * sx}, 1.022) translate(${tx}px, ${ty}px)`;
+      }, { passive: true });
+    }
 
     const mediaEl = layer.querySelector('#agy-live-wp-video, #agy-live-wp-webgl, #agy-live-wp-web');
     if (mediaEl) {
       mediaEl.style.objectFit = fitMode;
       mediaEl.style.objectPosition = `${posX}% ${posY}%`;
-      mediaEl.style.transform = flipH ? 'scaleX(-1)' : 'none';
+      if (!mouseParallax) {
+        mediaEl.style.transform = flipH ? 'scaleX(-1)' : 'none';
+      }
       mediaEl.style.filter = filterCss;
+      mediaEl.style.imageRendering = imgFilter === 'pixelate' ? 'pixelated' : 'auto';
     }
 
     const scrim = layer.querySelector('#agy-live-wp-scrim');
@@ -612,7 +650,9 @@
 
     const vid = layer.querySelector('video');
     if (vid) {
-      vid.muted = !st.liveAudio;
+      const normVol = Math.max(0, Math.min(1, (Number.isFinite(volPct) ? volPct : 68) / 100));
+      try { vid.volume = normVol; } catch (e) {}
+      vid.muted = !st.liveAudio || normVol === 0;
       if (!vid.srcObject && Number.isFinite(speedPct) && speedPct >= 10 && speedPct <= 300) {
         try { vid.playbackRate = speedPct / 100; } catch (e) {}
       }
@@ -1708,7 +1748,7 @@
         </div>
         <div style="flex: 1; display: flex; gap: 14px; min-height: 0; overflow: hidden;">
           <div id="agy-we-grid" style="flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows: max-content; gap: 11px; overflow-y: auto; padding-right: 6px;"></div>
-          <aside id="agy-we-inspector" style="width: 288px; flex-shrink: 0; border-radius: 12px; border: 1px solid ${mainTheme.borderColor}; background: ${mainTheme.cardBg || 'rgba(18, 14, 13, 0.86)'}; padding: 14px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px;"></aside>
+          <aside id="agy-we-inspector" style="width: 326px; flex-shrink: 0; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background: #1c1d21; padding: 12px 14px 16px 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; color: #e4e6eb; box-sizing: border-box;"></aside>
         </div>
       </div>
 
@@ -2215,21 +2255,32 @@
       const curLive = getState().liveWp;
       if (!curLive || !curLive.id) {
         weInspector.innerHTML = `
-          <div style="font-size: 13.5px; font-weight: 600; color: #f4f4f5;">Wallpaper Settings</div>
-          <div style="font-size: 12px; color: #a1a1aa; line-height: 1.5;">Select any wallpaper card on the left to customize its speed, alignment, position, flip, color filters, and custom author properties (such as Snow, Water Ripples, Clock, etc.).</div>
+          <div style="font-size: 14px; font-weight: 600; color: #f4f4f5;">Wallpaper Settings</div>
+          <div style="font-size: 12px; color: #9ca3af; line-height: 1.55;">Chọn một hình nền bất kỳ ở danh sách bên trái để hiển thị bảng cấu hình Wallpaper Engine (Thu âm, Màu thanh Taskbar, Âm lượng, Tốc độ, Chuột song song, Căn chỉnh, Vị trí, Lật, Image filter, Tuỳ chỉnh màu & Thuộc tính riêng).</div>
         `;
         return;
       }
 
       const catalogItem = weAllItems.find(x => x.id === curLive.id) || curLive;
       const customProps = Array.isArray(catalogItem.customProps) ? catalogItem.customProps : [];
+      const savedWe = (catalogItem.savedWeProps && typeof catalogItem.savedWeProps === 'object') ? catalogItem.savedWeProps : {};
       const prevUrl = catalogItem.previewFile ? buildMediaUrl(catalogItem.id, catalogItem.previewFile) : '';
       const cfg = (curLive.settings && typeof curLive.settings === 'object') ? curLive.settings : {};
+
+      const audioRecording = cfg.audioRecording !== undefined
+        ? Boolean(cfg.audioRecording)
+        : (savedWe.audioprocessing !== undefined ? Boolean(savedWe.audioprocessing) : Boolean(catalogItem.supportsAudio));
+      const schemeColor = cfg.schemeColor || catalogItem.schemeColor || '#19191d';
+      const volume = cfg.volume !== undefined
+        ? Number(cfg.volume)
+        : (savedWe.volume !== undefined ? Number(savedWe.volume) : 68);
       const speed = cfg.speed !== undefined ? Number(cfg.speed) : 100;
+      const mouseParallax = cfg.mouseParallax !== undefined ? Boolean(cfg.mouseParallax) : true;
       const fit = cfg.fit || 'cover';
       const posX = cfg.posX !== undefined ? Number(cfg.posX) : 50;
       const posY = cfg.posY !== undefined ? Number(cfg.posY) : 50;
       const flip = Boolean(cfg.flip);
+      const imageFilter = cfg.imageFilter || 'none';
       const showColor = Boolean(cfg.showColor);
       const brs = cfg.brightness !== undefined ? Number(cfg.brightness) : 100;
       const con = cfg.contrast !== undefined ? Number(cfg.contrast) : 100;
@@ -2237,117 +2288,259 @@
       const hue = cfg.hue !== undefined ? Number(cfg.hue) : 0;
       const customValues = (cfg.customValues && typeof cfg.customValues === 'object') ? cfg.customValues : {};
 
+      const typeLabel = catalogItem.category === 'scene' || catalogItem.category === 'scene-video'
+        ? 'Scene'
+        : (catalogItem.type === 'video' ? 'Video' : 'Web');
+      const resLabel = catalogItem.resolution || '3840 x 2160 - 4K';
+      const sizeLabel = catalogItem.sizeMb || '17 MB';
+      const authorName = catalogItem.author || 'Workshop Creator';
+      const subCount = catalogItem.subCount || 120;
+      const tags = Array.isArray(catalogItem.tags) && catalogItem.tags.length
+        ? catalogItem.tags
+        : [typeLabel, 'G - All ages', ...(customProps.length ? ['Customizable'] : [])];
+
+      let favMap = {};
+      try {
+        favMap = JSON.parse(localStorage.getItem('agy_we_favs_v1') || '{}') || {};
+      } catch (e) {}
+      const isFav = Boolean(favMap[catalogItem.id]);
+
+      const weBlue = '#2b7de9';
+
       weInspector.innerHTML = `
-        <div style="height: 125px; width: 100%; border-radius: 9px; background: #141418 ${prevUrl ? `url('${prevUrl}') center/cover no-repeat` : ''}; border: 1px solid rgba(255,255,255,0.12); flex-shrink: 0;"></div>
-        <div>
-          <div style="font-size: 14px; font-weight: 600; color: #ffffff; word-break: break-word;">${escapeHtml(catalogItem.title)}</div>
-          <div style="font-size: 11.5px; color: #a1a1aa; margin-top: 2px;">${escapeHtml(String(catalogItem.category || catalogItem.type).toUpperCase())} • ID ${escapeHtml(catalogItem.id)}</div>
-        </div>
-        <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.09);">
-          <span style="font-size: 12.5px; font-weight: 600; color: #e4e4e7;">Wallpaper Settings</span>
-          <button id="agy-insp-reset" type="button" style="padding: 3px 8px; border-radius: 6px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14); color: #d4d4d8; font-size: 11px; cursor: pointer;">↻ Mặc định</button>
+        <style>
+          #agy-we-inspector::-webkit-scrollbar { width: 5px; }
+          #agy-we-inspector::-webkit-scrollbar-track { background: #16171a; }
+          #agy-we-inspector::-webkit-scrollbar-thumb { background: #2b7de9; border-radius: 9999px; }
+          #agy-we-inspector .we-row { display: flex; justify-content: space-between; align-items: center; min-height: 28px; gap: 8px; font-size: 12.5px; color: #d8dade; }
+          #agy-we-inspector .we-lbl { display: flex; align-items: center; gap: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          #agy-we-inspector .we-ico { width: 15px; text-align: center; color: #c4c7ce; font-size: 13px; flex-shrink: 0; }
+          #agy-we-inspector .we-chk { width: 17px; height: 17px; accent-color: ${weBlue}; cursor: pointer; border-radius: 4px; flex-shrink: 0; }
+          #agy-we-inspector .we-rng-wrap { display: flex; align-items: center; gap: 8px; width: 150px; flex-shrink: 0; }
+          #agy-we-inspector .we-rng { flex: 1; height: 4px; accent-color: ${weBlue}; cursor: pointer; }
+          #agy-we-inspector .we-num { width: 28px; text-align: right; font-size: 12px; color: #e4e6eb; font-variant-numeric: tabular-nums; }
+          #agy-we-inspector .we-sel { width: 146px; background: #2b2d33; border: 1px solid rgba(255,255,255,0.12); border-radius: 4px; padding: 4px 8px; color: #e4e6eb; font-size: 12px; outline: none; cursor: pointer; }
+        </style>
+
+        <div style="position: relative; height: 162px; width: 100%; border-radius: 6px; overflow: hidden; background: #141519 ${prevUrl ? `url('${prevUrl}') center/cover no-repeat` : ''}; flex-shrink: 0;">
+          <div style="position: absolute; inset: 0; background: linear-gradient(180deg, rgba(28,29,33,0) 55%, rgba(28,29,33,0.92) 100%);"></div>
         </div>
 
-        <div style="display: flex; flex-direction: column; gap: 9px; font-size: 12px; color: #d4d4d8;">
-          <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
-            <span>▶ Tốc độ (Speed)</span>
-            <div style="display: flex; align-items: center; gap: 6px;">
-              <input id="agy-insp-speed" type="range" min="25" max="200" value="${speed}" style="width: 95px; cursor: pointer; accent-color: ${mainTheme.primary}; height: 4px;" />
-              <span id="agy-insp-speed-val" style="min-width: 32px; text-align: right;">${speed}</span>
+        <div style="margin-top: -6px; display: flex; flex-direction: column; gap: 7px;">
+          <div style="font-size: 15.5px; font-weight: 600; color: #ffffff; line-height: 1.3; word-break: break-word;">${escapeHtml(catalogItem.title)}</div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 7px; min-width: 0;">
+              <div style="width: 22px; height: 22px; border-radius: 50%; background: #2b2d33 ${prevUrl ? `url('${prevUrl}') center/cover no-repeat` : ''}; border: 1px solid rgba(255,255,255,0.2); flex-shrink: 0;"></div>
+              <span style="font-size: 13px; color: #3b82f6; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(authorName)}</span>
             </div>
+            <span style="padding: 2px 9px; border-radius: 9999px; background: #2b2d33; color: #d8dade; font-size: 11.5px; font-weight: 500; flex-shrink: 0;">👥 ${subCount}</span>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #c4c7ce;">
+            <span style="color: #4ade80;">🏆</span>
+            <span>${escapeHtml(typeLabel)} &middot; ${escapeHtml(resLabel)} &middot; ${escapeHtml(sizeLabel)}</span>
+          </div>
+
+          <div style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 1px;">
+            ${tags.map(tg => `<span style="padding: 2.5px 9px; border-radius: 9999px; background: #2b2d33; color: #c4c7ce; font-size: 11.5px;">${escapeHtml(tg)}</span>`).join('')}
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
+            <div style="color: ${weBlue}; font-size: 16px; letter-spacing: 5px; user-select: none;">★★★★★</div>
+            <button id="agy-insp-fav-btn" type="button" title="Yêu thích" style="width: 34px; height: 26px; border-radius: 4px; border: none; background: #2b2d33; color: ${isFav ? '#ef4444' : '#ffffff'}; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center;">♥</button>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 5px; position: relative;">
+            <button type="button" style="flex: 1; height: 28px; border-radius: 4px; border: none; background: #2b2d33; color: #e4e6eb; font-size: 12px; font-weight: 500; display: flex; align-items: center; justify-content: center; gap: 5px; cursor: default;">✓ Subscribed</button>
+            <button id="agy-insp-steam-btn" type="button" title="Mở trong Steam Workshop" style="width: 32px; height: 28px; border-radius: 4px; border: none; background: #2b2d33; color: #e4e6eb; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center;">❂</button>
+            <button id="agy-insp-menu-btn" type="button" title="Tuỳ chọn thư mục Workshop" style="width: 32px; height: 28px; border-radius: 4px; border: none; background: #2b2d33; color: #e4e6eb; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center;">☰</button>
+            <div id="agy-insp-ctx-menu" style="display: none; position: absolute; right: 0; top: 32px; z-index: 20; background: #25272c; border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.65); min-width: 175px; flex-direction: column; gap: 2px;">
+              <button id="agy-insp-open-dir" type="button" style="text-align: left; padding: 6px 10px; border: none; border-radius: 4px; background: transparent; color: #e4e6eb; font-size: 12px; cursor: pointer;">📂 Mở thư mục trong Explorer</button>
+              <button id="agy-insp-copy-id" type="button" style="text-align: left; padding: 6px 10px; border: none; border-radius: 4px; background: transparent; color: #e4e6eb; font-size: 12px; cursor: pointer;">📋 Copy Workshop ID (${escapeHtml(catalogItem.id)})</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 8px; margin-top: 6px;">
+          <span style="font-size: 13px; font-weight: 500; color: #e4e6eb; white-space: nowrap;">Wallpaper Settings</span>
+          <div style="flex: 1; height: 1px; background: #26436c;"></div>
+          <button id="agy-insp-reset" type="button" style="padding: 3px 9px; border-radius: 4px; background: #2b2d33; border: none; color: #e4e6eb; font-size: 11.5px; cursor: pointer; display: flex; align-items: center; gap: 4px; white-space: nowrap;">↻ Mặc định</button>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <label class="we-row" style="cursor: pointer;">
+            <span class="we-lbl"><span class="we-ico">🎙</span><span>Thu âm</span></span>
+            <input id="agy-insp-audiorec" class="we-chk" type="checkbox" ${audioRecording ? 'checked' : ''} />
           </label>
 
-          <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
-            <span>🖼 Căn chỉnh</span>
-            <select id="agy-insp-fit" style="background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.16); border-radius: 6px; padding: 4px 8px; color: #f4f4f5; font-size: 12px; width: 132px;">
+          <label class="we-row" style="cursor: pointer;">
+            <span class="we-lbl"><span class="we-ico">🎨</span><span>Màu thanh Taskbar</span></span>
+            <input id="agy-insp-schemecolor" type="color" value="${escapeHtml(schemeColor)}" style="width: 38px; height: 22px; padding: 0; border: 1px solid rgba(255,255,255,0.22); border-radius: 4px; background: #141519; cursor: pointer;" />
+          </label>
+
+          <div class="we-row">
+            <span class="we-lbl"><span class="we-ico">🔊</span><span>Âm lượng</span></span>
+            <div class="we-rng-wrap">
+              <input id="agy-insp-vol" class="we-rng" type="range" min="0" max="100" value="${volume}" />
+              <span id="agy-insp-vol-val" class="we-num">${volume}</span>
+            </div>
+          </div>
+
+          <div class="we-row">
+            <span class="we-lbl"><span class="we-ico">▶</span><span>Tốc độ</span></span>
+            <div class="we-rng-wrap">
+              <input id="agy-insp-speed" class="we-rng" type="range" min="10" max="200" value="${speed}" />
+              <span id="agy-insp-speed-val" class="we-num">${speed}</span>
+            </div>
+          </div>
+
+          <label class="we-row" style="cursor: pointer;">
+            <span class="we-lbl"><span class="we-ico">🖱</span><span>Chuột song song</span></span>
+            <input id="agy-insp-parallax" class="we-chk" type="checkbox" ${mouseParallax ? 'checked' : ''} />
+          </label>
+
+          <div class="we-row">
+            <span class="we-lbl"><span class="we-ico">🖼</span><span>Căn chỉnh</span></span>
+            <select id="agy-insp-fit" class="we-sel">
               <option value="cover" ${fit === 'cover' ? 'selected' : ''}>Cover</option>
-              <option value="contain" ${fit === 'contain' ? 'selected' : ''}>Contain (Fit)</option>
-              <option value="fill" ${fit === 'fill' ? 'selected' : ''}>Stretch (Fill)</option>
               <option value="none" ${fit === 'none' ? 'selected' : ''}>Center</option>
+              <option value="contain" ${fit === 'contain' ? 'selected' : ''}>Fill (Contain)</option>
+              <option value="fill" ${fit === 'fill' ? 'selected' : ''}>Stretch</option>
+              <option value="free" ${fit === 'free' ? 'selected' : ''}>Free</option>
             </select>
-          </label>
+          </div>
 
-          <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
-            <span>↔ Vị trí ngang</span>
-            <div style="display: flex; align-items: center; gap: 6px;">
-              <input id="agy-insp-posx" type="range" min="0" max="100" value="${posX}" style="width: 95px; cursor: pointer; accent-color: ${mainTheme.primary}; height: 4px;" />
-              <span id="agy-insp-posx-val" style="min-width: 32px; text-align: right;">${posX}</span>
+          <div class="we-row">
+            <span class="we-lbl"><span class="we-ico">↔</span><span>Vị trí</span></span>
+            <div class="we-rng-wrap">
+              <input id="agy-insp-posx" class="we-rng" type="range" min="0" max="100" value="${posX}" />
+              <span id="agy-insp-posx-val" class="we-num">${posX}</span>
             </div>
-          </label>
+          </div>
 
-          <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
-            <span>↕ Vị trí dọc</span>
-            <div style="display: flex; align-items: center; gap: 6px;">
-              <input id="agy-insp-posy" type="range" min="0" max="100" value="${posY}" style="width: 95px; cursor: pointer; accent-color: ${mainTheme.primary}; height: 4px;" />
-              <span id="agy-insp-posy-val" style="min-width: 32px; text-align: right;">${posY}</span>
+          <div id="agy-insp-posy-row" class="we-row" style="display: ${fit === 'free' ? 'flex' : 'none'};">
+            <span class="we-lbl"><span class="we-ico">↕</span><span>Vị trí dọc</span></span>
+            <div class="we-rng-wrap">
+              <input id="agy-insp-posy" class="we-rng" type="range" min="0" max="100" value="${posY}" />
+              <span id="agy-insp-posy-val" class="we-num">${posY}</span>
             </div>
+          </div>
+
+          <label class="we-row" style="cursor: pointer;">
+            <span class="we-lbl"><span class="we-ico">⇄</span><span>Lật</span></span>
+            <input id="agy-insp-flip" class="we-chk" type="checkbox" ${flip ? 'checked' : ''} />
           </label>
 
-          <label style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
-            <span>⇄ Lật ngang (Flip)</span>
-            <input id="agy-insp-flip" type="checkbox" ${flip ? 'checked' : ''} style="width: 15px; height: 15px; accent-color: ${mainTheme.primary}; cursor: pointer;" />
+          <div class="we-row">
+            <span class="we-lbl"><span class="we-ico">🫧</span><span>Image filter</span></span>
+            <select id="agy-insp-imgfilter" class="we-sel">
+              <option value="none" ${imageFilter === 'none' ? 'selected' : ''}>None</option>
+              <option value="pixelate" ${imageFilter === 'pixelate' ? 'selected' : ''}>Pixelate</option>
+              <option value="bilinear" ${imageFilter === 'bilinear' ? 'selected' : ''}>Bilinear</option>
+              <option value="sepia" ${imageFilter === 'sepia' ? 'selected' : ''}>Sepia</option>
+              <option value="grayscale" ${imageFilter === 'grayscale' ? 'selected' : ''}>Grayscale</option>
+              <option value="invert" ${imageFilter === 'invert' ? 'selected' : ''}>Invert</option>
+              <option value="crt" ${imageFilter === 'crt' ? 'selected' : ''}>CRT Boost</option>
+            </select>
+          </div>
+
+          <label class="we-row" style="cursor: pointer;">
+            <span class="we-lbl"><span>Hiển thị tuỳ chỉnh màu</span></span>
+            <input id="agy-insp-color-toggle" class="we-chk" type="checkbox" ${showColor ? 'checked' : ''} />
           </label>
 
-          <label style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
-            <span>🎨 Hiển thị tuỳ chỉnh màu</span>
-            <input id="agy-insp-color-toggle" type="checkbox" ${showColor ? 'checked' : ''} style="width: 15px; height: 15px; accent-color: ${mainTheme.primary}; cursor: pointer;" />
-          </label>
-
-          <div id="agy-insp-color-box" style="display: ${showColor ? 'flex' : 'none'}; flex-direction: column; gap: 7px; padding: 8px 10px; border-radius: 8px; background: rgba(0,0,0,0.28); border: 1px solid rgba(255,255,255,0.08);">
-            <label style="display: flex; justify-content: space-between; align-items: center;">
-              <span>Độ sáng</span>
-              <input id="agy-insp-brs" type="range" min="50" max="150" value="${brs}" style="width: 105px; accent-color: ${mainTheme.primary}; height: 4px;" />
-            </label>
-            <label style="display: flex; justify-content: space-between; align-items: center;">
-              <span>Tương phản</span>
-              <input id="agy-insp-con" type="range" min="50" max="150" value="${con}" style="width: 105px; accent-color: ${mainTheme.primary}; height: 4px;" />
-            </label>
-            <label style="display: flex; justify-content: space-between; align-items: center;">
-              <span>Bão hoà màu</span>
-              <input id="agy-insp-sat" type="range" min="0" max="200" value="${sat}" style="width: 105px; accent-color: ${mainTheme.primary}; height: 4px;" />
-            </label>
-            <label style="display: flex; justify-content: space-between; align-items: center;">
-              <span>Đổi tông (Hue)</span>
-              <input id="agy-insp-hue" type="range" min="0" max="360" value="${hue}" style="width: 105px; accent-color: ${mainTheme.primary}; height: 4px;" />
-            </label>
+          <div id="agy-insp-color-box" style="display: ${showColor ? 'flex' : 'none'}; flex-direction: column; gap: 7px; padding: 8px 10px; border-radius: 6px; background: #151619; border: 1px solid rgba(255,255,255,0.07);">
+            <div class="we-row">
+              <span class="we-lbl"><span class="we-ico">☀</span><span>Độ sáng</span></span>
+              <div class="we-rng-wrap">
+                <input id="agy-insp-brs" class="we-rng" type="range" min="50" max="150" value="${brs}" />
+                <span id="agy-insp-brs-val" class="we-num">${brs}</span>
+              </div>
+            </div>
+            <div class="we-row">
+              <span class="we-lbl"><span class="we-ico">◑</span><span>Độ tương phản</span></span>
+              <div class="we-rng-wrap">
+                <input id="agy-insp-con" class="we-rng" type="range" min="50" max="150" value="${con}" />
+                <span id="agy-insp-con-val" class="we-num">${con}</span>
+              </div>
+            </div>
+            <div class="we-row">
+              <span class="we-lbl"><span class="we-ico">💧</span><span>Độ bão hoà</span></span>
+              <div class="we-rng-wrap">
+                <input id="agy-insp-sat" class="we-rng" type="range" min="0" max="200" value="${sat}" />
+                <span id="agy-insp-sat-val" class="we-num">${sat}</span>
+              </div>
+            </div>
+            <div class="we-row">
+              <span class="we-lbl"><span class="we-ico">🌈</span><span>Đổi tông màu</span></span>
+              <div class="we-rng-wrap">
+                <input id="agy-insp-hue" class="we-rng" type="range" min="0" max="360" value="${hue}" />
+                <span id="agy-insp-hue-val" class="we-num">${hue}</span>
+              </div>
+            </div>
           </div>
         </div>
 
         ${customProps.length ? `
-          <div style="padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.09); display: flex; flex-direction: column; gap: 9px;">
-            <div style="font-size: 12px; font-weight: 600; color: #a1a1aa;">Thuộc tính riêng của hình nền</div>
+          <div style="height: 1px; background: #26436c; margin: 4px 0;"></div>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
             ${customProps.map(p => {
-              const curVal = customValues[p.key] !== undefined ? customValues[p.key] : p.value;
+              const curVal = customValues[p.key] !== undefined
+                ? customValues[p.key]
+                : (savedWe[p.key] !== undefined ? savedWe[p.key] : p.value);
               if (p.type === 'bool') {
                 return `
-                  <label style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #e4e4e7; cursor: pointer;">
-                    <span>${escapeHtml(p.text)}</span>
-                    <input class="agy-insp-cprop" data-key="${escapeHtml(p.key)}" data-type="bool" type="checkbox" ${curVal ? 'checked' : ''} style="width: 15px; height: 15px; accent-color: ${mainTheme.primary}; cursor: pointer;" />
+                  <label class="we-row" style="cursor: pointer;">
+                    <span class="we-lbl" title="${escapeHtml(p.text)}">${escapeHtml(p.text)}</span>
+                    <input class="agy-insp-cprop we-chk" data-key="${escapeHtml(p.key)}" data-type="bool" type="checkbox" ${curVal ? 'checked' : ''} />
                   </label>
                 `;
               }
               if (p.type === 'slider') {
+                const numV = Number(curVal) || 0;
                 return `
-                  <label style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #e4e4e7; gap: 8px;">
-                    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(p.text)}</span>
-                    <input class="agy-insp-cprop" data-key="${escapeHtml(p.key)}" data-type="slider" type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${Number(curVal) || 0}" style="width: 105px; accent-color: ${mainTheme.primary}; height: 4px; cursor: pointer;" />
+                  <div class="we-row">
+                    <span class="we-lbl" title="${escapeHtml(p.text)}">${escapeHtml(p.text)}</span>
+                    <div class="we-rng-wrap">
+                      <input class="agy-insp-cprop we-rng" data-key="${escapeHtml(p.key)}" data-type="slider" type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${numV}" />
+                      <span class="we-num">${numV}</span>
+                    </div>
+                  </div>
+                `;
+              }
+              if (p.type === 'color') {
+                const hexV = String(curVal || '#2b7de9').startsWith('#') ? curVal : '#2b7de9';
+                return `
+                  <label class="we-row" style="cursor: pointer;">
+                    <span class="we-lbl" title="${escapeHtml(p.text)}">${escapeHtml(p.text)}</span>
+                    <input class="agy-insp-cprop" data-key="${escapeHtml(p.key)}" data-type="color" type="color" value="${escapeHtml(hexV)}" style="width: 38px; height: 22px; padding: 0; border: 1px solid rgba(255,255,255,0.22); border-radius: 4px; background: #141519; cursor: pointer;" />
                   </label>
                 `;
               }
               if (p.type === 'combo' && p.options.length) {
                 return `
-                  <label style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #e4e4e7; gap: 8px;">
-                    <span>${escapeHtml(p.text)}</span>
-                    <select class="agy-insp-cprop" data-key="${escapeHtml(p.key)}" data-type="combo" style="background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.16); border-radius: 6px; padding: 3px 6px; color: #f4f4f5; font-size: 11.5px; max-width: 130px;">
+                  <div class="we-row">
+                    <span class="we-lbl" title="${escapeHtml(p.text)}">${escapeHtml(p.text)}</span>
+                    <select class="agy-insp-cprop we-sel" data-key="${escapeHtml(p.key)}" data-type="combo">
                       ${p.options.map(opt => `<option value="${escapeHtml(opt.value)}" ${String(curVal) === String(opt.value) ? 'selected' : ''}>${escapeHtml(opt.label || opt.value)}</option>`).join('')}
                     </select>
-                  </label>
+                  </div>
                 `;
               }
               return '';
             }).join('')}
           </div>
         ` : ''}
+
+        <div style="display: flex; align-items: center; gap: 8px; margin-top: 6px;">
+          <span style="font-size: 13px; font-weight: 500; color: #e4e6eb; white-space: nowrap;">Presets</span>
+          <div style="flex: 1; height: 1px; background: #26436c;"></div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <button id="agy-insp-preset-load" type="button" style="flex: 1; height: 28px; border-radius: 4px; border: none; background: #2b2d33; color: #e4e6eb; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px;">📁 Tải</button>
+          <button id="agy-insp-preset-save" type="button" style="flex: 1; height: 28px; border-radius: 4px; border: none; background: #2b2d33; color: #e4e6eb; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px;">💾 Lưu</button>
+        </div>
       `;
 
       function patchLiveSettings(patch, rebuildScene = false) {
@@ -2360,10 +2553,56 @@
           if (layer) {
             const isDx11 = nextLive.category === 'scene' || nextLive.type === 'image';
             const mUrl = buildMediaUrl(nextLive.id, nextLive.relFile);
-            layer.dataset.mediaKey = `${nextLive.category || nextLive.type}|${nextLive.id}|${mUrl}|${isDx11 ? JSON.stringify(nextSettings.customValues || {}) : ''}`;
+            const dxObj = { ...(nextSettings.customValues || {}) };
+            if (nextSettings.audioRecording !== undefined) dxObj.__audioprocessing = Boolean(nextSettings.audioRecording);
+            if (nextSettings.schemeColor) dxObj.__schemecolor = String(nextSettings.schemeColor);
+            layer.dataset.mediaKey = `${nextLive.category || nextLive.type}|${nextLive.id}|${mUrl}|${isDx11 ? JSON.stringify(dxObj) : ''}`;
           }
         }
         applyTheme({ liveWp: nextLive });
+      }
+
+      const favBtn = weInspector.querySelector('#agy-insp-fav-btn');
+      if (favBtn) {
+        favBtn.addEventListener('click', () => {
+          try {
+            const m = JSON.parse(localStorage.getItem('agy_we_favs_v1') || '{}') || {};
+            m[catalogItem.id] = !m[catalogItem.id];
+            localStorage.setItem('agy_we_favs_v1', JSON.stringify(m));
+            favBtn.style.color = m[catalogItem.id] ? '#ef4444' : '#ffffff';
+          } catch (e) {}
+        });
+      }
+
+      const steamBtn = weInspector.querySelector('#agy-insp-steam-btn');
+      if (steamBtn) {
+        steamBtn.addEventListener('click', () => {
+          window.open(`steam://url/CommunityFilePage/${encodeURIComponent(catalogItem.id)}`, '_self');
+        });
+      }
+
+      const menuBtn = weInspector.querySelector('#agy-insp-menu-btn');
+      const ctxMenu = weInspector.querySelector('#agy-insp-ctx-menu');
+      if (menuBtn && ctxMenu) {
+        menuBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          ctxMenu.style.display = ctxMenu.style.display === 'none' ? 'flex' : 'none';
+        });
+      }
+      const openDirBtn = weInspector.querySelector('#agy-insp-open-dir');
+      if (openDirBtn) {
+        openDirBtn.addEventListener('click', () => {
+          const base = window.__AGY_MEDIA_BASE__ || '';
+          if (base) fetch(`${base}/api/we/open-folder?id=${encodeURIComponent(catalogItem.id)}`).catch(() => {});
+          if (ctxMenu) ctxMenu.style.display = 'none';
+        });
+      }
+      const copyIdBtn = weInspector.querySelector('#agy-insp-copy-id');
+      if (copyIdBtn) {
+        copyIdBtn.addEventListener('click', () => {
+          if (navigator.clipboard) navigator.clipboard.writeText(catalogItem.id).catch(() => {});
+          if (ctxMenu) ctxMenu.style.display = 'none';
+        });
       }
 
       const resetInsp = weInspector.querySelector('#agy-insp-reset');
@@ -2371,8 +2610,47 @@
         resetInsp.addEventListener('click', () => {
           const latest = getState().liveWp;
           if (!latest) return;
-          applyTheme({ liveWp: { ...catalogItem, settings: {} } });
+          const resetVals = {};
+          customProps.forEach(p => { resetVals[p.key] = p.value; });
+          applyTheme({
+            liveWp: {
+              ...catalogItem,
+              settings: {
+                audioRecording: Boolean(catalogItem.supportsAudio),
+                schemeColor: catalogItem.schemeColor || '#19191d',
+                customValues: resetVals
+              }
+            }
+          });
           renderWeInspector();
+        });
+      }
+
+      const audioRecEl = weInspector.querySelector('#agy-insp-audiorec');
+      if (audioRecEl) {
+        audioRecEl.addEventListener('change', (e) => {
+          patchLiveSettings({ audioRecording: e.target.checked }, true);
+        });
+      }
+
+      const schemeColEl = weInspector.querySelector('#agy-insp-schemecolor');
+      if (schemeColEl) {
+        schemeColEl.addEventListener('change', (e) => {
+          patchLiveSettings({ schemeColor: e.target.value }, true);
+        });
+      }
+
+      const volEl = weInspector.querySelector('#agy-insp-vol');
+      const volVal = weInspector.querySelector('#agy-insp-vol-val');
+      if (volEl) {
+        volEl.addEventListener('input', (e) => {
+          const v = parseInt(e.target.value, 10);
+          if (volVal) volVal.textContent = String(v);
+          if (v > 0 && !getState().liveAudio) {
+            if (weAudioToggle) weAudioToggle.checked = true;
+            applyTheme({ liveAudio: true });
+          }
+          patchLiveSettings({ volume: v }, false);
         });
       }
 
@@ -2386,9 +2664,21 @@
         });
       }
 
+      const parEl = weInspector.querySelector('#agy-insp-parallax');
+      if (parEl) {
+        parEl.addEventListener('change', (e) => {
+          patchLiveSettings({ mouseParallax: e.target.checked }, false);
+        });
+      }
+
       const fitEl = weInspector.querySelector('#agy-insp-fit');
+      const posyRow = weInspector.querySelector('#agy-insp-posy-row');
       if (fitEl) {
-        fitEl.addEventListener('change', (e) => patchLiveSettings({ fit: e.target.value }, false));
+        fitEl.addEventListener('change', (e) => {
+          const val = e.target.value;
+          if (posyRow) posyRow.style.display = val === 'free' ? 'flex' : 'none';
+          patchLiveSettings({ fit: val === 'free' ? 'cover' : val }, false);
+        });
       }
 
       const pxEl = weInspector.querySelector('#agy-insp-posx');
@@ -2416,6 +2706,11 @@
         flipEl.addEventListener('change', (e) => patchLiveSettings({ flip: e.target.checked }, false));
       }
 
+      const imgFilterEl = weInspector.querySelector('#agy-insp-imgfilter');
+      if (imgFilterEl) {
+        imgFilterEl.addEventListener('change', (e) => patchLiveSettings({ imageFilter: e.target.value }, false));
+      }
+
       const colTog = weInspector.querySelector('#agy-insp-color-toggle');
       const colBox = weInspector.querySelector('#agy-insp-color-box');
       if (colTog && colBox) {
@@ -2428,21 +2723,63 @@
       ['brs', 'con', 'sat', 'hue'].forEach(k => {
         const mapKey = { brs: 'brightness', con: 'contrast', sat: 'saturate', hue: 'hue' }[k];
         const el = weInspector.querySelector('#agy-insp-' + k);
+        const valSpan = weInspector.querySelector('#agy-insp-' + k + '-val');
         if (el) {
-          el.addEventListener('input', (e) => patchLiveSettings({ [mapKey]: parseInt(e.target.value, 10) }, false));
+          el.addEventListener('input', (e) => {
+            const v = parseInt(e.target.value, 10);
+            if (valSpan) valSpan.textContent = String(v);
+            patchLiveSettings({ [mapKey]: v }, false);
+          });
         }
       });
 
       weInspector.querySelectorAll('.agy-insp-cprop').forEach(el => {
+        const pType = el.dataset.type;
+        if (pType === 'slider') {
+          el.addEventListener('input', () => {
+            const numSpan = el.parentElement && el.parentElement.querySelector('.we-num');
+            if (numSpan) numSpan.textContent = String(el.value);
+          });
+        }
         el.addEventListener('change', () => {
           const key = el.dataset.key;
-          const pType = el.dataset.type;
           const val = pType === 'bool' ? el.checked : (pType === 'slider' ? Number(el.value) : el.value);
           const latest = getState().liveWp;
           const prevCustom = (latest && latest.settings && latest.settings.customValues) || {};
           patchLiveSettings({ customValues: { ...prevCustom, [key]: val } }, true);
         });
       });
+
+      const presetSaveBtn = weInspector.querySelector('#agy-insp-preset-save');
+      const presetLoadBtn = weInspector.querySelector('#agy-insp-preset-load');
+      if (presetSaveBtn) {
+        presetSaveBtn.addEventListener('click', () => {
+          try {
+            const latest = getState().liveWp;
+            if (!latest) return;
+            const map = JSON.parse(localStorage.getItem('agy_we_presets_v1') || '{}') || {};
+            map[catalogItem.id] = latest.settings || {};
+            localStorage.setItem('agy_we_presets_v1', JSON.stringify(map));
+            presetSaveBtn.textContent = '✓ Đã lưu';
+            setTimeout(() => { presetSaveBtn.textContent = '💾 Lưu'; }, 1200);
+          } catch (e) {}
+        });
+      }
+      if (presetLoadBtn) {
+        presetLoadBtn.addEventListener('click', () => {
+          try {
+            const map = JSON.parse(localStorage.getItem('agy_we_presets_v1') || '{}') || {};
+            const savedCfg = map[catalogItem.id];
+            if (savedCfg) {
+              applyTheme({ liveWp: { ...catalogItem, settings: savedCfg } });
+              renderWeInspector();
+            } else {
+              presetLoadBtn.textContent = 'Chưa có';
+              setTimeout(() => { presetLoadBtn.textContent = '📁 Tải'; }, 1200);
+            }
+          } catch (e) {}
+        });
+      }
     }
 
     if (wePauseBlurToggle) {
@@ -2914,6 +3251,7 @@
   document.querySelectorAll('[data-agy-scroll-bound]').forEach(el => delete el.dataset.agyScrollBound);
   document.querySelectorAll('[data-agy-tbo-mounted]').forEach(el => delete el.dataset.agyTboMounted);
   const staleBackdrop = document.getElementById('agy-custom-theme-modal-backdrop');
+  const wasModalOpen = Boolean(staleBackdrop && staleBackdrop.style.display !== 'none');
   if (staleBackdrop) staleBackdrop.remove();
   const staleSidebarBtn = document.getElementById('agy-custom-theme-sidebar-btn');
   if (staleSidebarBtn) staleSidebarBtn.remove();
@@ -2932,6 +3270,9 @@
     attributeFilter: ['data-has-browser-hole', 'data-browser-hole']
   });
   tick();
+  if (wasModalOpen) {
+    openCustomThemeModal();
+  }
 
   return 'Antigravity Custom Theme Engine Ready!';
 })();
