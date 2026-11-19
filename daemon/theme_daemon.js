@@ -11,7 +11,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const { execFile, execFileSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 if (typeof globalThis.WebSocket !== 'function') {
     console.error('[theme-daemon] Node.js >= 22 with built-in WebSocket is required.');
@@ -189,6 +189,112 @@ function inspectScenePkg(pkgPath) {
     }
 }
 
+function parseSceneManifestFromPkg(pkgPath, fallbackTitle = '') {
+    let fd = null;
+    const manifest = {
+        ok: true,
+        parallax: 1.0,
+        windStrength: 0.45,
+        waterStrength: 0.0,
+        shimmerStrength: 0.35,
+        particles: [],
+    };
+    try {
+        const stat = fs.statSync(pkgPath);
+        if (!stat.isFile() || stat.size < 64) return manifest;
+        fd = fs.openSync(pkgPath, 'r');
+        const hdrBuf = Buffer.alloc(Math.min(65536, stat.size));
+        const hdrRead = fs.readSync(fd, hdrBuf, 0, hdrBuf.length, 0);
+        if (hdrRead < 16) return manifest;
+
+        let pos = 0;
+        const verLen = hdrBuf.readUInt32LE(pos);
+        pos += 4;
+        if (verLen > 64 || pos + verLen + 4 > hdrRead) return manifest;
+        pos += verLen;
+        const entryCount = hdrBuf.readUInt32LE(pos);
+        pos += 4;
+        if (entryCount > 5000) return manifest;
+
+        const entries = [];
+        for (let i = 0; i < entryCount; i++) {
+            if (pos + 4 > hdrRead) break;
+            const nameLen = hdrBuf.readUInt32LE(pos);
+            pos += 4;
+            if (nameLen > 512 || pos + nameLen + 8 > hdrRead) break;
+            const name = hdrBuf.toString('utf8', pos, pos + nameLen);
+            pos += nameLen;
+            const ofs = hdrBuf.readUInt32LE(pos);
+            const sz = hdrBuf.readUInt32LE(pos + 4);
+            pos += 8;
+            entries.push({ name, ofs, sz });
+        }
+        const dataBase = pos;
+        const sjEntry = entries.find((e) => e.name === 'scene.json');
+        if (!sjEntry || sjEntry.sz <= 0 || sjEntry.sz > 5 * 1024 * 1024) return manifest;
+
+        const sjBuf = Buffer.alloc(sjEntry.sz);
+        fs.readSync(fd, sjBuf, 0, sjEntry.sz, dataBase + sjEntry.ofs);
+        const sj = JSON.parse(sjBuf.toString('utf8').replace(/^\uFEFF/, ''));
+
+        let windHits = 0;
+        let waterHits = 0;
+        let shimmerHits = 0;
+        const pSet = new Set();
+
+        const objs = Array.isArray(sj.objects) ? sj.objects : [];
+        const allText = `${fallbackTitle} ${ objs.map((o) => `${o.name || ''} ${o.particle || ''}`).join(' ') }`.toLowerCase();
+
+        for (const o of objs) {
+            const effs = Array.isArray(o.effects) ? o.effects : [];
+            for (const ef of effs) {
+                const efName = `${ef.file || ''} ${ef.name || ''}`.toLowerCase();
+                if (/foliage|sway|shake|wind|hair|cloth/.test(efName)) windHits++;
+                if (/water|wave|ripple|flow|ocean|river|lake|sea/.test(efName)) waterHits++;
+                if (/shimmer|shine|pulse|glow|bloom|light|bokeh|ray/.test(efName)) shimmerHits++;
+            }
+            if (o.particle || o.name) {
+                const pName = `${o.name || ''} ${o.particle || ''}`.toLowerCase();
+                if (/ember|spark|fire|ash|火|烬/.test(pName)) pSet.add('ember');
+                if (/snow|winter|ice|雪/.test(pName)) pSet.add('snow');
+                if (/rain|storm|drop|雨/.test(pName)) pSet.add('rain');
+                if (/leaf|leaves|petal|flower|sakura|cherry|blossom|樱|叶|花/.test(pName)) pSet.add('petal');
+                if (/star|blink|shoot|meteor|cosmic|night|星/.test(pName)) pSet.add('star');
+                if (/shaft|ray|sun|beam|光|阳/.test(pName)) pSet.add('lightshaft');
+                if (/dust|mote|fog|mist|cloud|smoke|尘|雾|云/.test(pName)) pSet.add('dust');
+            }
+        }
+
+        if (/forest|spring|tree|flower|wind|樱|春|林|花/.test(allText) && pSet.size === 0) {
+            pSet.add('petal');
+            pSet.add('lightshaft');
+        }
+        if (/night|star|cosmic|witcher|hole|dark|夜|星/.test(allText) && pSet.size === 0) {
+            pSet.add('star');
+            pSet.add('dust');
+        }
+        if (pSet.size === 0) {
+            pSet.add('dust');
+            pSet.add('star');
+        }
+
+        manifest.windStrength = Math.min(1.25, 0.35 + windHits * 0.18);
+        manifest.waterStrength = waterHits > 0 ? Math.min(1.2, 0.32 + waterHits * 0.22) : 0.18;
+        manifest.shimmerStrength = Math.min(1.2, 0.3 + shimmerHits * 0.2);
+        manifest.particles = Array.from(pSet);
+        return manifest;
+    } catch (_) {
+        manifest.particles = ['dust', 'star'];
+        return manifest;
+    } finally {
+        if (fd !== null) {
+            try {
+                fs.closeSync(fd);
+            } catch (_) {}
+        }
+    }
+}
+
 function scanWallpaperEngineItems(forceRefresh = false) {
     const wsDir = resolveWeWorkshopDir();
     if (!wsDir) return { workshopDir: null, items: [] };
@@ -314,7 +420,7 @@ function startMediaServer() {
             return;
         }
 
-        if (pathname === '/api/we/activate-scene') {
+        if (pathname === '/api/we/scene-manifest') {
             const id = String(parsedUrl.searchParams.get('id') || '').trim();
             const wsDir = resolveWeWorkshopDir();
             if (!wsDir || !/^[a-zA-Z0-9_-]+$/.test(id)) {
@@ -322,18 +428,12 @@ function startMediaServer() {
                 res.end(JSON.stringify({ ok: false, error: 'Invalid workshop dir or scene id' }));
                 return;
             }
-            const scriptPy = path.join(ROOT_DIR, 'scripts', 'activate_we_scene.py');
-            const pyCandidates = ['C:\\Python314\\python.exe', 'python', 'python3'];
-            const pyExe = pyCandidates.find((p) => p === 'python' || p === 'python3' || fs.existsSync(p)) || 'python';
-            execFile(pyExe, [scriptPy, wsDir, id], { timeout: 12000, windowsHide: true }, (err, stdout, stderr) => {
-                if (err) {
-                    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-                    res.end(JSON.stringify({ ok: false, error: stderr || err.message }));
-                    return;
-                }
-                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
-                res.end(String(stdout || '').trim() || JSON.stringify({ ok: false, error: 'Empty output' }));
-            });
+            const catalog = scanWallpaperEngineItems(false);
+            const found = catalog.items.find((x) => x.id === id);
+            const pkgPath = path.join(wsDir, id, 'scene.pkg');
+            const manifest = parseSceneManifestFromPkg(pkgPath, found ? found.title : '');
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=300' });
+            res.end(JSON.stringify(manifest));
             return;
         }
 

@@ -99,6 +99,352 @@
     } catch (e) {}
   }
 
+  function stopStandaloneSceneEngine() {
+    if (window.__AGY_SCENE_ENGINE__) {
+      try {
+        window.__AGY_SCENE_ENGINE__.destroy();
+      } catch (e) {}
+      window.__AGY_SCENE_ENGINE__ = null;
+    }
+  }
+
+  function mountStandaloneSceneEngine(layer, live, mediaUrl) {
+    stopStandaloneSceneEngine();
+
+    const glCanvas = document.createElement('canvas');
+    glCanvas.id = 'agy-live-wp-webgl';
+    glCanvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:block;background:#070910 url("' + mediaUrl + '") center/cover no-repeat;';
+    layer.appendChild(glCanvas);
+
+    const ptCanvas = document.createElement('canvas');
+    ptCanvas.id = 'agy-live-wp-particles';
+    ptCanvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:block;';
+    layer.appendChild(ptCanvas);
+
+    let destroyed = false;
+    let rafId = 0;
+    let gl = null;
+    let prog = null;
+    let tex = null;
+    let imgAspect = 16 / 9;
+    let texReady = false;
+
+    const cfg = {
+      windStrength: 0.65,
+      waterStrength: 0.25,
+      shimmerStrength: 0.45,
+      particles: ['dust', 'star']
+    };
+
+    let targetMX = 0, targetMY = 0, curMX = 0, curMY = 0;
+    const onMouseMove = (e) => {
+      const w = window.innerWidth || 1920;
+      const h = window.innerHeight || 1080;
+      targetMX = ((e.clientX / w) - 0.5) * 2.0;
+      targetMY = ((e.clientY / h) - 0.5) * 2.0;
+    };
+    window.addEventListener('mousemove', onMouseMove, { passive: true });
+
+    function resizeCanvases() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const cw = Math.max(640, Math.round((layer.clientWidth || window.innerWidth || 1920) * dpr));
+      const ch = Math.max(360, Math.round((layer.clientHeight || window.innerHeight || 1080) * dpr));
+      if (glCanvas.width !== cw || glCanvas.height !== ch) {
+        glCanvas.width = cw;
+        glCanvas.height = ch;
+        if (gl) gl.viewport(0, 0, cw, ch);
+      }
+      const pw = Math.max(640, layer.clientWidth || window.innerWidth || 1920);
+      const ph = Math.max(360, layer.clientHeight || window.innerHeight || 1080);
+      if (ptCanvas.width !== pw || ptCanvas.height !== ph) {
+        ptCanvas.width = pw;
+        ptCanvas.height = ph;
+      }
+    }
+    resizeCanvases();
+    window.addEventListener('resize', resizeCanvases, { passive: true });
+
+    try {
+      gl = glCanvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'high-performance' })
+        || glCanvas.getContext('webgl', { alpha: false, antialias: false, depth: false, stencil: false });
+      if (gl) {
+        const vsSrc = `
+          attribute vec2 a_pos;
+          varying vec2 v_uv;
+          void main() {
+            v_uv = vec2(a_pos.x * 0.5 + 0.5, 0.5 - a_pos.y * 0.5);
+            gl_Position = vec4(a_pos, 0.0, 1.0);
+          }
+        `;
+        const fsSrc = `
+          precision highp float;
+          varying vec2 v_uv;
+          uniform sampler2D u_tex;
+          uniform float u_time;
+          uniform vec2 u_mouse;
+          uniform float u_canvasAspect;
+          uniform float u_imgAspect;
+          uniform float u_wind;
+          uniform float u_water;
+          uniform float u_shimmer;
+
+          void main() {
+            // Object-fit: cover aspect ratio mapping
+            vec2 uv = v_uv;
+            if (u_canvasAspect > u_imgAspect) {
+              float scale = u_imgAspect / u_canvasAspect;
+              uv.y = (uv.y - 0.5) * scale + 0.5;
+            } else {
+              float scale = u_canvasAspect / u_imgAspect;
+              uv.x = (uv.x - 0.5) * scale + 0.5;
+            }
+
+            // Smooth overscan (4.2%) for camera breathing & mouse depth parallax
+            uv = (uv - 0.5) * 0.958 + 0.5;
+            float radial = length(v_uv - 0.5);
+            vec2 breathe = vec2(sin(u_time * 0.55) * 0.0045, cos(u_time * 0.42) * 0.0038);
+            vec2 parallax = u_mouse * (0.0085 + radial * 0.006) + breathe;
+            uv += parallax;
+
+            // Organic multi-harmonic foliage / hair / cloth wind sway
+            float w1 = sin(uv.y * 7.5 + u_time * 1.65 + uv.x * 3.2);
+            float w2 = cos(uv.x * 9.0 - u_time * 1.25 + uv.y * 5.0);
+            float w3 = sin((uv.x + uv.y) * 14.0 + u_time * 2.3);
+            float edgeMask = smoothstep(0.02, 0.25, uv.x) * smoothstep(0.98, 0.75, uv.x);
+            vec2 windDisp = vec2(w1 * 0.0028 + w3 * 0.0011, w2 * 0.0018) * u_wind * (0.55 + 0.45 * edgeMask);
+
+            // Lower-field water / reflection ripple displacement
+            float waterZone = smoothstep(0.45, 0.92, v_uv.y);
+            float ripX = sin(uv.y * 38.0 - u_time * 3.1 + uv.x * 12.0) * 0.0032;
+            float ripY = cos(uv.x * 28.0 + u_time * 2.6 + uv.y * 22.0) * 0.0018;
+            vec2 waterDisp = vec2(ripX, ripY) * u_water * waterZone;
+
+            vec2 finalUv = clamp(uv + windDisp + waterDisp, 0.001, 0.999);
+            vec4 col = texture2D(u_tex, finalUv);
+
+            // Dynamic specular highlight shimmer & living light pulse
+            float luma = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+            float hi = smoothstep(0.62, 0.94, luma);
+            float pulse = 0.5 + 0.5 * sin(u_time * 2.1 + uv.x * 8.0 - uv.y * 6.0);
+            col.rgb += col.rgb * hi * pulse * 0.16 * u_shimmer;
+
+            gl_FragColor = vec4(col.rgb, 1.0);
+          }
+        `;
+        const compile = (type, src) => {
+          const s = gl.createShader(type);
+          gl.shaderSource(s, src);
+          gl.compileShader(s);
+          return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : null;
+        };
+        const vs = compile(gl.VERTEX_SHADER, vsSrc);
+        const fs = compile(gl.FRAGMENT_SHADER, fsSrc);
+        if (vs && fs) {
+          prog = gl.createProgram();
+          gl.attachShader(prog, vs);
+          gl.attachShader(prog, fs);
+          gl.linkProgram(prog);
+          gl.useProgram(prog);
+
+          const buf = gl.createBuffer();
+          gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+          const loc = gl.getAttribLocation(prog, 'a_pos');
+          gl.enableVertexAttribArray(loc);
+          gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+        }
+      }
+    } catch (e) {}
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      if (destroyed || !gl || !prog) return;
+      imgAspect = (img.naturalWidth || 1920) / Math.max(1, img.naturalHeight || 1080);
+      tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      texReady = true;
+    };
+    img.src = mediaUrl;
+
+    const pCtx = ptCanvas.getContext('2d');
+    let particles = [];
+    function rebuildParticles() {
+      const types = cfg.particles.length ? cfg.particles : ['dust', 'star'];
+      const w = ptCanvas.width || 1920;
+      const h = ptCanvas.height || 1080;
+      particles = [];
+      types.forEach(kind => {
+        if (kind === 'lightshaft') return;
+        const count = kind === 'rain' ? 95 : kind === 'snow' ? 65 : kind === 'star' ? 55 : 42;
+        for (let i = 0; i < count; i++) {
+          particles.push({
+            kind,
+            x: Math.random() * w,
+            y: Math.random() * h,
+            r: kind === 'petal' ? (3 + Math.random() * 4.5) : kind === 'rain' ? (12 + Math.random() * 14) : (1.2 + Math.random() * 2.6),
+            vx: kind === 'rain' ? -1.8 : kind === 'petal' ? (0.45 + Math.random() * 0.9) : ((Math.random() - 0.5) * 0.55),
+            vy: kind === 'ember' ? (-0.55 - Math.random() * 1.1) : kind === 'rain' ? (11 + Math.random() * 7) : kind === 'snow' || kind === 'petal' ? (0.45 + Math.random() * 0.95) : ((Math.random() - 0.5) * 0.35),
+            phase: Math.random() * Math.PI * 2,
+            alpha: 0.25 + Math.random() * 0.65
+          });
+        }
+      });
+    }
+    rebuildParticles();
+
+    const base = window.__AGY_MEDIA_BASE__ || '';
+    if (base) {
+      fetch(`${base}/api/we/scene-manifest?id=${encodeURIComponent(live.id)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (destroyed || !data || !data.ok) return;
+          cfg.windStrength = Number(data.windStrength) || 0.65;
+          cfg.waterStrength = Number(data.waterStrength) || 0.25;
+          cfg.shimmerStrength = Number(data.shimmerStrength) || 0.45;
+          if (Array.isArray(data.particles) && data.particles.length) {
+            cfg.particles = data.particles;
+            rebuildParticles();
+          }
+        })
+        .catch(() => {});
+    }
+
+    const t0 = performance.now();
+    function renderFrame(now) {
+      if (destroyed) return;
+      const st = getState();
+      if (document.hidden || (st.livePauseBlur && !document.hasFocus())) {
+        rafId = 0;
+        return;
+      }
+      const t = (now - t0) * 0.001;
+      curMX += (targetMX - curMX) * 0.05;
+      curMY += (targetMY - curMY) * 0.05;
+
+      if (gl && prog && texReady) {
+        gl.useProgram(prog);
+        gl.uniform1f(gl.getUniformLocation(prog, 'u_time'), t);
+        gl.uniform2f(gl.getUniformLocation(prog, 'u_mouse'), curMX, curMY);
+        gl.uniform1f(gl.getUniformLocation(prog, 'u_canvasAspect'), glCanvas.width / Math.max(1, glCanvas.height));
+        gl.uniform1f(gl.getUniformLocation(prog, 'u_imgAspect'), imgAspect);
+        gl.uniform1f(gl.getUniformLocation(prog, 'u_wind'), cfg.windStrength);
+        gl.uniform1f(gl.getUniformLocation(prog, 'u_water'), cfg.waterStrength);
+        gl.uniform1f(gl.getUniformLocation(prog, 'u_shimmer'), cfg.shimmerStrength);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      }
+
+      if (pCtx) {
+        const w = ptCanvas.width;
+        const h = ptCanvas.height;
+        pCtx.clearRect(0, 0, w, h);
+
+        if (cfg.particles.includes('lightshaft')) {
+          pCtx.save();
+          pCtx.globalCompositeOperation = 'screen';
+          for (let i = 0; i < 3; i++) {
+            const sway = Math.sin(t * 0.35 + i * 1.7) * 90;
+            const x0 = w * (0.18 + i * 0.28) + sway;
+            const grad = pCtx.createLinearGradient(x0, 0, x0 + 220, h * 0.85);
+            const a = (0.045 + 0.025 * Math.sin(t * 0.7 + i)) * cfg.shimmerStrength;
+            grad.addColorStop(0, `rgba(255, 240, 200, ${a.toFixed(4)})`);
+            grad.addColorStop(1, 'rgba(255, 240, 200, 0)');
+            pCtx.fillStyle = grad;
+            pCtx.beginPath();
+            pCtx.moveTo(x0 - 70, 0);
+            pCtx.lineTo(x0 + 90, 0);
+            pCtx.lineTo(x0 + 380, h);
+            pCtx.lineTo(x0 + 60, h);
+            pCtx.closePath();
+            pCtx.fill();
+          }
+          pCtx.restore();
+        }
+
+        for (let i = 0; i < particles.length; i++) {
+          const p = particles[i];
+          p.x += p.vx + Math.sin(t * 1.2 + p.phase) * (p.kind === 'petal' || p.kind === 'snow' ? 0.45 : 0.15);
+          p.y += p.vy;
+          if (p.x < -20) p.x = w + 15;
+          if (p.x > w + 20) p.x = -15;
+          if (p.y < -20) p.y = h + 15;
+          if (p.y > h + 20) p.y = -15;
+
+          const twinkle = 0.55 + 0.45 * Math.sin(t * (p.kind === 'star' ? 2.6 : 1.5) + p.phase);
+          const a = p.alpha * twinkle;
+
+          if (p.kind === 'rain') {
+            pCtx.strokeStyle = `rgba(186, 230, 253, ${(a * 0.42).toFixed(3)})`;
+            pCtx.lineWidth = 1.1;
+            pCtx.beginPath();
+            pCtx.moveTo(p.x, p.y);
+            pCtx.lineTo(p.x + p.vx * 1.4, p.y + p.r);
+            pCtx.stroke();
+          } else if (p.kind === 'petal') {
+            pCtx.save();
+            pCtx.translate(p.x, p.y);
+            pCtx.rotate(t * 1.1 + p.phase);
+            pCtx.fillStyle = `rgba(255, 210, 225, ${(a * 0.75).toFixed(3)})`;
+            pCtx.beginPath();
+            pCtx.ellipse(0, 0, p.r, p.r * 0.55, 0, 0, Math.PI * 2);
+            pCtx.fill();
+            pCtx.restore();
+          } else if (p.kind === 'ember') {
+            pCtx.fillStyle = `rgba(251, 146, 60, ${(a * 0.88).toFixed(3)})`;
+            pCtx.beginPath();
+            pCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            pCtx.fill();
+          } else if (p.kind === 'snow') {
+            pCtx.fillStyle = `rgba(248, 250, 252, ${(a * 0.8).toFixed(3)})`;
+            pCtx.beginPath();
+            pCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            pCtx.fill();
+          } else {
+            pCtx.fillStyle = p.kind === 'star'
+              ? `rgba(224, 242, 254, ${(a * 0.85).toFixed(3)})`
+              : `rgba(254, 243, 199, ${(a * 0.55).toFixed(3)})`;
+            pCtx.beginPath();
+            pCtx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            pCtx.fill();
+          }
+        }
+      }
+
+      rafId = requestAnimationFrame(renderFrame);
+    }
+
+    rafId = requestAnimationFrame(renderFrame);
+
+    window.__AGY_SCENE_ENGINE__ = {
+      resume() {
+        if (!destroyed && !rafId) {
+          rafId = requestAnimationFrame(renderFrame);
+        }
+      },
+      pause() {
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+        }
+      },
+      destroy() {
+        destroyed = true;
+        if (rafId) cancelAnimationFrame(rafId);
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('resize', resizeCanvases);
+        try {
+          if (gl && tex) gl.deleteTexture(tex);
+          if (gl && prog) gl.deleteProgram(prog);
+        } catch (e) {}
+      }
+    };
+  }
+
   function syncLiveWallpaper(st, mainTheme, overlayRgb, overlayAlpha) {
     const shell = document.querySelector('.agy-shell');
     const existing = document.getElementById('agy-live-wp-layer');
@@ -106,6 +452,7 @@
     const mediaUrl = live ? buildMediaUrl(live.id, live.relFile) : '';
 
     if (!shell || !live || !mediaUrl) {
+      stopStandaloneSceneEngine();
       if (existing) {
         stopVideoElement(existing.querySelector('video'));
         existing.remove();
@@ -115,6 +462,7 @@
 
     let layer = existing;
     if (!layer || layer.parentNode !== shell) {
+      stopStandaloneSceneEngine();
       if (layer) {
         stopVideoElement(layer.querySelector('video'));
         layer.remove();
@@ -128,6 +476,7 @@
     const isDx11Scene = live.category === 'scene' || live.type === 'image';
     const mediaKey = `${live.category || live.type}|${live.id}|${mediaUrl}`;
     if (layer.dataset.mediaKey !== mediaKey) {
+      stopStandaloneSceneEngine();
       stopVideoElement(layer.querySelector('video'));
       layer.dataset.mediaKey = mediaKey;
       layer.innerHTML = '';
@@ -140,54 +489,7 @@
         iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none;display:block;';
         layer.appendChild(iframe);
       } else if (isDx11Scene) {
-        const video = document.createElement('video');
-        video.id = 'agy-live-wp-video';
-        video.poster = mediaUrl;
-        video.autoplay = true;
-        video.muted = true;
-        video.playsInline = true;
-        video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;display:block;background:#070910 url("' + mediaUrl + '") center/cover no-repeat;';
-        layer.appendChild(video);
-
-        const base = window.__AGY_MEDIA_BASE__ || '';
-        const reqKey = mediaKey;
-        if (base && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
-          fetch(`${base}/api/we/activate-scene?id=${encodeURIComponent(live.id)}&_t=${Date.now()}`)
-            .then(r => r.json())
-            .then(async (data) => {
-              if (!data || !data.ok || !data.sourceId) return;
-              const curLayer = document.getElementById('agy-live-wp-layer');
-              if (!curLayer || curLayer.dataset.mediaKey !== reqKey) return;
-              const curVid = curLayer.querySelector('#agy-live-wp-video');
-              if (!curVid) return;
-              try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                  audio: false,
-                  video: {
-                    mandatory: {
-                      chromeMediaSource: 'desktop',
-                      chromeMediaSourceId: data.sourceId,
-                      minWidth: 1920,
-                      maxWidth: 2560,
-                      minHeight: 1080,
-                      maxHeight: 1440,
-                      minFrameRate: 30,
-                      maxFrameRate: 60
-                    }
-                  }
-                });
-                if (curLayer.dataset.mediaKey !== reqKey) {
-                  stream.getTracks().forEach(t => t.stop());
-                  return;
-                }
-                stopVideoElement(curVid);
-                curVid.srcObject = stream;
-                const p = curVid.play();
-                if (p && typeof p.catch === 'function') p.catch(() => {});
-              } catch (e) {}
-            })
-            .catch(() => {});
-        }
+        mountStandaloneSceneEngine(layer, live, mediaUrl);
       } else {
         const video = document.createElement('video');
         video.id = 'agy-live-wp-video';
@@ -1166,6 +1468,7 @@
     if (modal) modal.remove();
     const liveLayer = document.getElementById('agy-live-wp-layer');
     if (liveLayer) {
+      stopStandaloneSceneEngine();
       stopVideoElement(liveLayer.querySelector('video'));
       liveLayer.remove();
     }
@@ -2251,10 +2554,14 @@
   }, { signal: window.__AGY_SCROLL_AC__.signal });
   window.addEventListener('load', () => scheduleTitleBarSync(), { signal: window.__AGY_SCROLL_AC__.signal });
   function syncVideoPlaybackState() {
-    const vid = document.getElementById('agy-live-wp-video');
-    if (!vid) return;
     const st = getState();
     const shouldPause = document.hidden || (st.livePauseBlur && !document.hasFocus());
+    if (window.__AGY_SCENE_ENGINE__) {
+      if (shouldPause) window.__AGY_SCENE_ENGINE__.pause();
+      else window.__AGY_SCENE_ENGINE__.resume();
+    }
+    const vid = document.getElementById('agy-live-wp-video');
+    if (!vid) return;
     if (shouldPause && !vid.paused) {
       try { vid.pause(); } catch (e) {}
     } else if (!shouldPause && vid.paused) {
