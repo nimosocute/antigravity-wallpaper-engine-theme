@@ -11,7 +11,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 
 if (typeof globalThis.WebSocket !== 'function') {
     console.error('[theme-daemon] Node.js >= 22 with built-in WebSocket is required.');
@@ -311,6 +311,29 @@ function startMediaServer() {
             const result = scanWallpaperEngineItems(force);
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
             res.end(JSON.stringify(result));
+            return;
+        }
+
+        if (pathname === '/api/we/activate-scene') {
+            const id = String(parsedUrl.searchParams.get('id') || '').trim();
+            const wsDir = resolveWeWorkshopDir();
+            if (!wsDir || !/^[a-zA-Z0-9_-]+$/.test(id)) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, error: 'Invalid workshop dir or scene id' }));
+                return;
+            }
+            const scriptPy = path.join(ROOT_DIR, 'scripts', 'activate_we_scene.py');
+            const pyCandidates = ['C:\\Python314\\python.exe', 'python', 'python3'];
+            const pyExe = pyCandidates.find((p) => p === 'python' || p === 'python3' || fs.existsSync(p)) || 'python';
+            execFile(pyExe, [scriptPy, wsDir, id], { timeout: 12000, windowsHide: true }, (err, stdout, stderr) => {
+                if (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false, error: stderr || err.message }));
+                    return;
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+                res.end(String(stdout || '').trim() || JSON.stringify({ ok: false, error: 'Empty output' }));
+            });
             return;
         }
 

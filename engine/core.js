@@ -86,6 +86,19 @@
     return `${base}/we/${encodeURIComponent(id)}/${encoded}`;
   }
 
+  function stopVideoElement(vid) {
+    if (!vid) return;
+    try {
+      if (vid.srcObject && typeof vid.srcObject.getTracks === 'function') {
+        vid.srcObject.getTracks().forEach(t => { try { t.stop(); } catch (e) {} });
+      }
+      vid.srcObject = null;
+      vid.pause();
+      vid.removeAttribute('src');
+      vid.load();
+    } catch (e) {}
+  }
+
   function syncLiveWallpaper(st, mainTheme, overlayRgb, overlayAlpha) {
     const shell = document.querySelector('.agy-shell');
     const existing = document.getElementById('agy-live-wp-layer');
@@ -94,10 +107,7 @@
 
     if (!shell || !live || !mediaUrl) {
       if (existing) {
-        const vid = existing.querySelector('video');
-        if (vid) {
-          try { vid.pause(); vid.removeAttribute('src'); vid.load(); } catch (e) {}
-        }
+        stopVideoElement(existing.querySelector('video'));
         existing.remove();
       }
       return false;
@@ -105,15 +115,20 @@
 
     let layer = existing;
     if (!layer || layer.parentNode !== shell) {
-      if (layer) layer.remove();
+      if (layer) {
+        stopVideoElement(layer.querySelector('video'));
+        layer.remove();
+      }
       layer = document.createElement('section');
       layer.id = 'agy-live-wp-layer';
       layer.setAttribute('aria-hidden', 'true');
       shell.insertBefore(layer, shell.firstChild);
     }
 
-    const mediaKey = `${live.type}|${mediaUrl}`;
+    const isDx11Scene = live.category === 'scene' || live.type === 'image';
+    const mediaKey = `${live.category || live.type}|${live.id}|${mediaUrl}`;
     if (layer.dataset.mediaKey !== mediaKey) {
+      stopVideoElement(layer.querySelector('video'));
       layer.dataset.mediaKey = mediaKey;
       layer.innerHTML = '';
 
@@ -124,13 +139,55 @@
         iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
         iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none;display:block;';
         layer.appendChild(iframe);
-      } else if (live.type === 'image') {
-        const img = document.createElement('img');
-        img.id = 'agy-live-wp-img';
-        img.src = mediaUrl;
-        img.alt = '';
-        img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;display:block;';
-        layer.appendChild(img);
+      } else if (isDx11Scene) {
+        const video = document.createElement('video');
+        video.id = 'agy-live-wp-video';
+        video.poster = mediaUrl;
+        video.autoplay = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;display:block;background:#070910 url("' + mediaUrl + '") center/cover no-repeat;';
+        layer.appendChild(video);
+
+        const base = window.__AGY_MEDIA_BASE__ || '';
+        const reqKey = mediaKey;
+        if (base && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
+          fetch(`${base}/api/we/activate-scene?id=${encodeURIComponent(live.id)}&_t=${Date.now()}`)
+            .then(r => r.json())
+            .then(async (data) => {
+              if (!data || !data.ok || !data.sourceId) return;
+              const curLayer = document.getElementById('agy-live-wp-layer');
+              if (!curLayer || curLayer.dataset.mediaKey !== reqKey) return;
+              const curVid = curLayer.querySelector('#agy-live-wp-video');
+              if (!curVid) return;
+              try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                  audio: false,
+                  video: {
+                    mandatory: {
+                      chromeMediaSource: 'desktop',
+                      chromeMediaSourceId: data.sourceId,
+                      minWidth: 1920,
+                      maxWidth: 2560,
+                      minHeight: 1080,
+                      maxHeight: 1440,
+                      minFrameRate: 30,
+                      maxFrameRate: 60
+                    }
+                  }
+                });
+                if (curLayer.dataset.mediaKey !== reqKey) {
+                  stream.getTracks().forEach(t => t.stop());
+                  return;
+                }
+                stopVideoElement(curVid);
+                curVid.srcObject = stream;
+                const p = curVid.play();
+                if (p && typeof p.catch === 'function') p.catch(() => {});
+              } catch (e) {}
+            })
+            .catch(() => {});
+        }
       } else {
         const video = document.createElement('video');
         video.id = 'agy-live-wp-video';
@@ -1108,7 +1165,10 @@
     const modal = document.getElementById('agy-custom-theme-modal-backdrop');
     if (modal) modal.remove();
     const liveLayer = document.getElementById('agy-live-wp-layer');
-    if (liveLayer) liveLayer.remove();
+    if (liveLayer) {
+      stopVideoElement(liveLayer.querySelector('video'));
+      liveLayer.remove();
+    }
     const shell = document.querySelector('.agy-shell');
     if (shell) {
       delete shell.dataset.agyHoleActive;
