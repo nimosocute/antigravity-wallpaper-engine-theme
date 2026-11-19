@@ -497,13 +497,14 @@
         iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none;display:block;';
         layer.appendChild(iframe);
       } else if (isDx11Scene) {
+        layer.style.background = '#070910 url("' + mediaUrl + '") center/cover no-repeat';
         const video = document.createElement('video');
         video.id = 'agy-live-wp-video';
         video.poster = mediaUrl;
         video.autoplay = true;
         video.muted = true;
         video.playsInline = true;
-        video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;display:block;background:#070910 url("' + mediaUrl + '") center/cover no-repeat;';
+        video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;display:block;opacity:0;transition:opacity 0.22s ease;';
         layer.appendChild(video);
 
         const base = window.__AGY_MEDIA_BASE__ || '';
@@ -512,7 +513,7 @@
           const propsParam = Object.keys(dxPropsObj).length
             ? `&props=${encodeURIComponent(customValsJson)}`
             : '';
-          const volParam = `&volume=${Math.max(0, Math.min(100, Math.round(Number.isFinite(effVol) ? effVol : 68)))}`;
+          const volParam = `&volume=${Math.max(0, Math.min(100, Math.round(Number.isFinite(effVol) ? effVol : 0)))}`;
           fetch(`${base}/api/we/activate-scene?id=${encodeURIComponent(live.id)}${propsParam}${volParam}&_t=${Date.now()}`)
             .then(r => r.json())
             .then(async (data) => {
@@ -549,6 +550,11 @@
                   return;
                 }
                 stopVideoElement(curVid);
+                curVid.onplaying = () => {
+                  setTimeout(() => {
+                    if (curVid.isConnected) curVid.style.opacity = '1';
+                  }, 120);
+                };
                 curVid.srcObject = stream;
                 const p = curVid.play();
                 if (p && typeof p.catch === 'function') p.catch(() => {});

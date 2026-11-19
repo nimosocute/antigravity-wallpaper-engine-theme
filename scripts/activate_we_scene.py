@@ -52,6 +52,12 @@ class PROCESS_INFORMATION(ctypes.Structure):
     ]
 
 
+try:
+    user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user32.SetProcessDpiAwarenessContext.restype = ctypes.c_bool
+    user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+except Exception:
+    pass
 user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 user32.GetSystemMetrics.restype = ctypes.c_int
 user32.OpenDesktopW.argtypes = [ctypes.c_wchar_p, ctypes.c_ulong, ctypes.c_bool, ctypes.c_ulong]
@@ -435,6 +441,9 @@ def main() -> None:
         print(json.dumps({"ok": False, "error": "WPEOverlappedWallpaper AGY_BG window not created"}))
         return
 
+    cloak_agy_bg_window(hwnd)
+    # Wait briefly for wallpaper64.exe to finish its initial D3D11/SetWindowPos setup, then re-lock exact 1920x1080
+    time.sleep(0.28)
     cloak_agy_bg_window(hwnd)
     try:
         set_we_audio_volume(int(float(vol_arg)) if vol_arg else 0)
