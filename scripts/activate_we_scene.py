@@ -138,17 +138,17 @@ def is_we_running() -> bool:
     )
 
 
-def find_agy_bg_window() -> int:
-    hwnd = user32.FindWindowExW(0, 0, "WPEOverlappedWallpaper", "AGY_BG")
-    if not hwnd:
+def find_agy_bg_window(slot: str = "AGY_BG") -> int:
+    hwnd = user32.FindWindowExW(0, 0, "WPEOverlappedWallpaper", slot)
+    if not hwnd and slot == "AGY_BG":
         hwnd = user32.FindWindowExW(0, 0, "WPEOverlappedWallpaper", None)
     return int(hwnd or 0)
 
 
-def close_agy_bg_window() -> None:
+def close_agy_bg_window(slot: str = "") -> None:
     w = 0
     while True:
-        w = user32.FindWindowExW(0, w, "WPEOverlappedWallpaper", None)
+        w = user32.FindWindowExW(0, w, "WPEOverlappedWallpaper", slot if slot else None)
         if not w:
             break
         user32.PostMessageW(w, 0x0010, 0, 0)  # WM_CLOSE
@@ -372,6 +372,7 @@ def main() -> None:
     action = sys.argv[2].strip()
     props_json = sys.argv[3].strip() if len(sys.argv) > 3 else ""
     vol_arg = sys.argv[4].strip() if len(sys.argv) > 4 else ""
+    slot = sys.argv[5].strip() if len(sys.argv) > 5 and sys.argv[5].strip() else "AGY_BG"
 
     if action == "volume":
         try:
@@ -385,8 +386,8 @@ def main() -> None:
     attach_default_desktop()
 
     if action == "close":
-        close_agy_bg_window()
-        print(json.dumps({"ok": True, "closed": True}))
+        close_agy_bg_window(props_json)
+        print(json.dumps({"ok": True, "closed": True, "slot": props_json or "all"}))
         return
 
     we_dir = ws_dir.parent.parent.parent / "common" / "wallpaper_engine"
@@ -414,31 +415,31 @@ def main() -> None:
             if is_we_running():
                 break
 
-    existing_hwnd = find_agy_bg_window()
+    existing_hwnd = find_agy_bg_window(slot)
     if existing_hwnd and pj_changed:
-        # Force wallpaper64.exe to reload the updated project.json properties into AGY_BG
-        close_agy_bg_window()
+        # Force wallpaper64.exe to reload the updated project.json properties into this slot
+        close_agy_bg_window(slot)
         for _ in range(15):
             time.sleep(0.06)
-            if not find_agy_bg_window():
+            if not find_agy_bg_window(slot):
                 break
 
     off_y = max(3000, int(user32.GetSystemMetrics(77)) + int(user32.GetSystemMetrics(79)) + 1000)
     cmd = (
         f'"{exe}" -control openWallpaper -file "{project_json}" '
-        f'-playInWindow "AGY_BG" -x 0 -y {off_y} -width 1920 -height 1080 -borderless'
+        f'-playInWindow "{slot}" -x 0 -y {off_y} -width 1920 -height 1080 -borderless'
     )
     spawn_on_default_desktop(cmd, str(we_dir))
 
     hwnd = 0
     for _ in range(80):
-        hwnd = find_agy_bg_window()
+        hwnd = find_agy_bg_window(slot)
         if hwnd:
             break
         time.sleep(0.02)
 
     if not hwnd:
-        print(json.dumps({"ok": False, "error": "WPEOverlappedWallpaper AGY_BG window not created"}))
+        print(json.dumps({"ok": False, "error": f"WPEOverlappedWallpaper {slot} window not created"}))
         return
 
     cloak_agy_bg_window(hwnd)
@@ -454,6 +455,7 @@ def main() -> None:
             {
                 "ok": True,
                 "hwnd": hwnd,
+                "slot": slot,
                 "sourceId": f"window:{hwnd}:0",
             }
         )

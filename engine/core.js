@@ -495,25 +495,10 @@
         layer.innerHTML = '';
       } else {
         layer.style.background = '';
-        const prevVid = layer.querySelector('video');
-        if (prevVid && prevVid.videoWidth > 0 && prevVid.videoHeight > 0) {
-          try {
-            const snap = document.createElement('canvas');
-            snap.width = prevVid.videoWidth;
-            snap.height = prevVid.videoHeight;
-            snap.dataset.agyStale = '1';
-            snap.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;display:block;';
-            const ctx = snap.getContext('2d');
-            if (ctx) ctx.drawImage(prevVid, 0, 0, snap.width, snap.height);
-            const sc = layer.querySelector('#agy-live-wp-scrim');
-            if (sc) layer.insertBefore(snap, sc);
-            else layer.appendChild(snap);
-          } catch (e) {}
-        }
+        // Double-buffering: keep the old <video> live & animating underneath while the new slot loads!
         layer.querySelectorAll('video, canvas, iframe').forEach(el => {
-          if (el.tagName === 'CANVAS' && el.dataset.agyStale === '1') return;
-          if (el.tagName === 'VIDEO') stopVideoElement(el);
-          el.remove();
+          el.dataset.agyStale = '1';
+          el.removeAttribute('id');
         });
       }
 
@@ -530,18 +515,21 @@
         video.autoplay = true;
         video.muted = true;
         video.playsInline = true;
-        video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;display:block;opacity:0;transition:opacity 0.22s ease;';
+        video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;display:block;opacity:0;transition:opacity 0.24s ease;';
         const existingScrim = layer.querySelector('#agy-live-wp-scrim');
         if (existingScrim) layer.insertBefore(video, existingScrim);
         else layer.appendChild(video);
 
         const reqKey = mediaKey;
         if (useDx11Stream) {
+          const prevSlot = window.__AGY_WE_ACTIVE_SLOT__ || '';
+          const nextSlot = prevSlot === 'AGY_BG_A' ? 'AGY_BG_B' : 'AGY_BG_A';
+          window.__AGY_WE_ACTIVE_SLOT__ = nextSlot;
           const propsParam = Object.keys(dxPropsObj).length
             ? `&props=${encodeURIComponent(customValsJson)}`
             : '';
           const volParam = `&volume=${Math.max(0, Math.min(100, Math.round(Number.isFinite(effVol) ? effVol : 0)))}`;
-          fetch(`${base}/api/we/activate-scene?id=${encodeURIComponent(live.id)}${propsParam}${volParam}&_t=${Date.now()}`)
+          fetch(`${base}/api/we/activate-scene?id=${encodeURIComponent(live.id)}${propsParam}${volParam}&slot=${nextSlot}&_t=${Date.now()}`)
             .then(r => r.json())
             .then(async (data) => {
               const curLayer = document.getElementById('agy-live-wp-layer');
@@ -597,7 +585,10 @@
                         if (el.tagName === 'VIDEO') stopVideoElement(el);
                         el.remove();
                       });
-                    }, 240);
+                      if (prevSlot && prevSlot !== nextSlot) {
+                        fetch(`${base}/api/we/activate-scene?id=close&slot=${prevSlot}`).catch(() => {});
+                      }
+                    }, 260);
                   };
                   const pollFrame = () => {
                     if (!curVid.isConnected || curLayer.dataset.mediaKey !== reqKey) return;

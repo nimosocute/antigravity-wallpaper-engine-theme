@@ -637,6 +637,7 @@ function startMediaServer() {
             const id = String(parsedUrl.searchParams.get('id') || '').trim();
             const props = String(parsedUrl.searchParams.get('props') || '').trim();
             const vol = parsedUrl.searchParams.get('volume');
+            const slot = String(parsedUrl.searchParams.get('slot') || '').trim();
             const wsDir = resolveWeWorkshopDir();
             if (!wsDir || !/^[a-zA-Z0-9_-]+$/.test(id)) {
                 res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -646,8 +647,9 @@ function startMediaServer() {
             const scriptPy = path.join(ROOT_DIR, 'scripts', 'activate_we_scene.py');
             const pyCandidates = ['C:\\Python314\\python.exe', 'python', 'python3'];
             const pyExe = pyCandidates.find((p) => p === 'python' || p === 'python3' || fs.existsSync(p)) || 'python';
-            const args = [scriptPy, wsDir, id, props || ''];
-            if (vol !== null && vol !== '') args.push(String(Math.max(0, Math.min(100, Math.round(Number(vol) || 0)))));
+            const args = id === 'close'
+                ? [scriptPy, wsDir, 'close', slot]
+                : [scriptPy, wsDir, id, props || '', vol !== null && vol !== '' ? String(Math.max(0, Math.min(100, Math.round(Number(vol) || 0)))) : '', slot || 'AGY_BG'];
             execFile(pyExe, args, { timeout: 12000, windowsHide: true }, (err, stdout, stderr) => {
                 if (err) {
                     res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
