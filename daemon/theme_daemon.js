@@ -11,7 +11,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 
 if (typeof globalThis.WebSocket !== 'function') {
     console.error('[theme-daemon] Node.js >= 22 with built-in WebSocket is required.');
@@ -340,6 +340,32 @@ function scanWallpaperEngineItems(forceRefresh = false) {
                 mtimeMs = fs.statSync(itemDir).mtimeMs;
             } catch (_) {}
 
+            const customProps = [];
+            try {
+                const rawProps = data && data.general && data.general.properties;
+                if (rawProps && typeof rawProps === 'object') {
+                    for (const [k, p] of Object.entries(rawProps)) {
+                        if (!p || typeof p !== 'object' || k === 'schemecolor') continue;
+                        const pType = String(p.type || '').toLowerCase();
+                        if (!['bool', 'slider', 'combo', 'color', 'text'].includes(pType)) continue;
+                        const label = String(p.text || k).replace(/<[^>]+>/g, '').trim() || k;
+                        if (label.startsWith('ui_browse_')) continue;
+                        customProps.push({
+                            key: k,
+                            text: label,
+                            type: pType,
+                            value: p.value,
+                            min: p.min !== undefined ? Number(p.min) : 0,
+                            max: p.max !== undefined ? Number(p.max) : 100,
+                            step: p.step !== undefined ? Number(p.step) : (p.max !== undefined && Number(p.max) <= 2 ? 0.05 : 1),
+                            options: Array.isArray(p.options) ? p.options : [],
+                            order: Number(p.order) || 100,
+                        });
+                    }
+                    customProps.sort((a, b) => a.order - b.order);
+                }
+            } catch (_) {}
+
             if (rawType === 'video' || rawType === 'web') {
                 const relFile = String(data.file || '').replace(/\\/g, '/');
                 if (!relFile) continue;
@@ -355,6 +381,7 @@ function scanWallpaperEngineItems(forceRefresh = false) {
                     title: String(data.title || id).trim(),
                     relFile,
                     previewFile,
+                    customProps,
                     mtimeMs,
                 });
             } else {
@@ -372,6 +399,7 @@ function scanWallpaperEngineItems(forceRefresh = false) {
                         relFile: `__pkg__`,
                         previewFile,
                         pkgSlice: pkgInfo,
+                        customProps,
                         mtimeMs,
                     });
                 } else if (previewFile) {
@@ -382,6 +410,7 @@ function scanWallpaperEngineItems(forceRefresh = false) {
                         title: String(data.title || id).trim(),
                         relFile: previewFile,
                         previewFile,
+                        customProps,
                         mtimeMs,
                     });
                 }
@@ -417,6 +446,31 @@ function startMediaServer() {
             const result = scanWallpaperEngineItems(force);
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
             res.end(JSON.stringify(result));
+            return;
+        }
+
+        if (pathname === '/api/we/activate-scene') {
+            const id = String(parsedUrl.searchParams.get('id') || '').trim();
+            const props = String(parsedUrl.searchParams.get('props') || '').trim();
+            const wsDir = resolveWeWorkshopDir();
+            if (!wsDir || !/^[a-zA-Z0-9_-]+$/.test(id)) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, error: 'Invalid workshop dir or scene id' }));
+                return;
+            }
+            const scriptPy = path.join(ROOT_DIR, 'scripts', 'activate_we_scene.py');
+            const pyCandidates = ['C:\\Python314\\python.exe', 'python', 'python3'];
+            const pyExe = pyCandidates.find((p) => p === 'python' || p === 'python3' || fs.existsSync(p)) || 'python';
+            const args = props ? [scriptPy, wsDir, id, props] : [scriptPy, wsDir, id];
+            execFile(pyExe, args, { timeout: 12000, windowsHide: true }, (err, stdout, stderr) => {
+                if (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false, error: stderr || err.message }));
+                    return;
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+                res.end(String(stdout || '').trim() || JSON.stringify({ ok: false, error: 'Empty output' }));
+            });
             return;
         }
 
@@ -1022,8 +1076,21 @@ function watchPayload() {
     }
 }
 
+function closeAgyBgWindowSync() {
+    try {
+        const wsDir = resolveWeWorkshopDir();
+        if (!wsDir) return;
+        const scriptPy = path.join(ROOT_DIR, 'scripts', 'activate_we_scene.py');
+        if (!fs.existsSync(scriptPy)) return;
+        const pyCandidates = ['C:\\Python314\\python.exe', 'python', 'python3'];
+        const pyExe = pyCandidates.find((p) => p === 'python' || p === 'python3' || fs.existsSync(p)) || 'python';
+        execFileSync(pyExe, [scriptPy, wsDir, 'close'], { timeout: 2500, windowsHide: true });
+    } catch (_) {}
+}
+
 function shutdown(signal) {
     log(`Shutting down on ${signal}.`);
+    closeAgyBgWindowSync();
     if (mediaServer) {
         try {
             mediaServer.close();

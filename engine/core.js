@@ -474,7 +474,9 @@
     }
 
     const isDx11Scene = live.category === 'scene' || live.type === 'image';
-    const mediaKey = `${live.category || live.type}|${live.id}|${mediaUrl}`;
+    const wpCfg = (live && live.settings && typeof live.settings === 'object') ? live.settings : {};
+    const customValsJson = JSON.stringify(wpCfg.customValues || {});
+    const mediaKey = `${live.category || live.type}|${live.id}|${mediaUrl}|${isDx11Scene ? customValsJson : ''}`;
     if (layer.dataset.mediaKey !== mediaKey) {
       stopStandaloneSceneEngine();
       stopVideoElement(layer.querySelector('video'));
@@ -489,7 +491,71 @@
         iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none;display:block;';
         layer.appendChild(iframe);
       } else if (isDx11Scene) {
-        mountStandaloneSceneEngine(layer, live, mediaUrl);
+        const video = document.createElement('video');
+        video.id = 'agy-live-wp-video';
+        video.poster = mediaUrl;
+        video.autoplay = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;display:block;background:#070910 url("' + mediaUrl + '") center/cover no-repeat;';
+        layer.appendChild(video);
+
+        const base = window.__AGY_MEDIA_BASE__ || '';
+        const reqKey = mediaKey;
+        if (base && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
+          const propsParam = wpCfg.customValues && Object.keys(wpCfg.customValues).length
+            ? `&props=${encodeURIComponent(JSON.stringify(wpCfg.customValues))}`
+            : '';
+          fetch(`${base}/api/we/activate-scene?id=${encodeURIComponent(live.id)}${propsParam}&_t=${Date.now()}`)
+            .then(r => r.json())
+            .then(async (data) => {
+              const curLayer = document.getElementById('agy-live-wp-layer');
+              if (!curLayer || curLayer.dataset.mediaKey !== reqKey) return;
+              if (!data || !data.ok || !data.sourceId) {
+                const sc = curLayer.querySelector('#agy-live-wp-scrim');
+                const vOld = curLayer.querySelector('#agy-live-wp-video');
+                if (vOld) vOld.remove();
+                mountStandaloneSceneEngine(curLayer, live, mediaUrl);
+                if (sc) curLayer.appendChild(sc);
+                return;
+              }
+              const curVid = curLayer.querySelector('#agy-live-wp-video');
+              if (!curVid) return;
+              try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                  audio: false,
+                  video: {
+                    mandatory: {
+                      chromeMediaSource: 'desktop',
+                      chromeMediaSourceId: data.sourceId,
+                      minWidth: 1920,
+                      maxWidth: 2560,
+                      minHeight: 1080,
+                      maxHeight: 1440,
+                      minFrameRate: 30,
+                      maxFrameRate: 60
+                    }
+                  }
+                });
+                if (curLayer.dataset.mediaKey !== reqKey) {
+                  stream.getTracks().forEach(t => t.stop());
+                  return;
+                }
+                stopVideoElement(curVid);
+                curVid.srcObject = stream;
+                const p = curVid.play();
+                if (p && typeof p.catch === 'function') p.catch(() => {});
+              } catch (e) {
+                const sc = curLayer.querySelector('#agy-live-wp-scrim');
+                curVid.remove();
+                mountStandaloneSceneEngine(curLayer, live, mediaUrl);
+                if (sc) curLayer.appendChild(sc);
+              }
+            })
+            .catch(() => {});
+        } else {
+          mountStandaloneSceneEngine(layer, live, mediaUrl);
+        }
       } else {
         const video = document.createElement('video');
         video.id = 'agy-live-wp-video';
@@ -513,6 +579,27 @@
       layer.appendChild(scrim);
     }
 
+    const fitMode = wpCfg.fit || 'cover';
+    const posX = wpCfg.posX !== undefined ? Number(wpCfg.posX) : 50;
+    const posY = wpCfg.posY !== undefined ? Number(wpCfg.posY) : 50;
+    const flipH = Boolean(wpCfg.flip);
+    const speedPct = wpCfg.speed !== undefined ? Number(wpCfg.speed) : 100;
+    const brs = wpCfg.brightness !== undefined ? Number(wpCfg.brightness) : 100;
+    const con = wpCfg.contrast !== undefined ? Number(wpCfg.contrast) : 100;
+    const sat = wpCfg.saturate !== undefined ? Number(wpCfg.saturate) : 100;
+    const hue = wpCfg.hue !== undefined ? Number(wpCfg.hue) : 0;
+    const filterCss = (brs !== 100 || con !== 100 || sat !== 100 || hue !== 0)
+      ? `brightness(${brs}%) contrast(${con}%) saturate(${sat}%) hue-rotate(${hue}deg)`
+      : 'none';
+
+    const mediaEl = layer.querySelector('#agy-live-wp-video, #agy-live-wp-webgl, #agy-live-wp-web');
+    if (mediaEl) {
+      mediaEl.style.objectFit = fitMode;
+      mediaEl.style.objectPosition = `${posX}% ${posY}%`;
+      mediaEl.style.transform = flipH ? 'scaleX(-1)' : 'none';
+      mediaEl.style.filter = filterCss;
+    }
+
     const scrim = layer.querySelector('#agy-live-wp-scrim');
     if (scrim) {
       const secondaryGlowStop = mainTheme.secondaryGlow
@@ -526,6 +613,9 @@
     const vid = layer.querySelector('video');
     if (vid) {
       vid.muted = !st.liveAudio;
+      if (!vid.srcObject && Number.isFinite(speedPct) && speedPct >= 10 && speedPct <= 300) {
+        try { vid.playbackRate = speedPct / 100; } catch (e) {}
+      }
       const shouldPause = document.hidden || (st.livePauseBlur && !document.hasFocus());
       if (shouldPause && !vid.paused) {
         try { vid.pause(); } catch (e) {}
@@ -1616,7 +1706,10 @@
             </button>
           </div>
         </div>
-        <div id="agy-we-grid" style="flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); grid-auto-rows: max-content; gap: 12px; overflow-y: auto; padding-right: 6px;"></div>
+        <div style="flex: 1; display: flex; gap: 14px; min-height: 0; overflow: hidden;">
+          <div id="agy-we-grid" style="flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows: max-content; gap: 11px; overflow-y: auto; padding-right: 6px;"></div>
+          <aside id="agy-we-inspector" style="width: 288px; flex-shrink: 0; border-radius: 12px; border: 1px solid ${mainTheme.borderColor}; background: ${mainTheme.cardBg || 'rgba(18, 14, 13, 0.86)'}; padding: 14px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px;"></aside>
+        </div>
       </div>
 
       <div id="agy-theme-scroll-container" style="display: none; padding: 24px 32px 48px 32px; max-width: 1100px; margin: 0 auto; overflow-y: auto; height: 100%; box-sizing: border-box; color: #f4f4f5;">
@@ -2105,6 +2198,7 @@
     });
 
     const weGrid = container.querySelector('#agy-we-grid');
+    const weInspector = container.querySelector('#agy-we-inspector');
     const weStatus = container.querySelector('#agy-we-status');
     const weSearch = container.querySelector('#agy-we-search');
     const weSort = container.querySelector('#agy-we-sort');
@@ -2115,6 +2209,241 @@
     const weCatPills = container.querySelectorAll('.agy-we-cat-pill');
     let weAllItems = [];
     let weActiveCat = 'all';
+
+    function renderWeInspector() {
+      if (!weInspector) return;
+      const curLive = getState().liveWp;
+      if (!curLive || !curLive.id) {
+        weInspector.innerHTML = `
+          <div style="font-size: 13.5px; font-weight: 600; color: #f4f4f5;">Wallpaper Settings</div>
+          <div style="font-size: 12px; color: #a1a1aa; line-height: 1.5;">Select any wallpaper card on the left to customize its speed, alignment, position, flip, color filters, and custom author properties (such as Snow, Water Ripples, Clock, etc.).</div>
+        `;
+        return;
+      }
+
+      const catalogItem = weAllItems.find(x => x.id === curLive.id) || curLive;
+      const customProps = Array.isArray(catalogItem.customProps) ? catalogItem.customProps : [];
+      const prevUrl = catalogItem.previewFile ? buildMediaUrl(catalogItem.id, catalogItem.previewFile) : '';
+      const cfg = (curLive.settings && typeof curLive.settings === 'object') ? curLive.settings : {};
+      const speed = cfg.speed !== undefined ? Number(cfg.speed) : 100;
+      const fit = cfg.fit || 'cover';
+      const posX = cfg.posX !== undefined ? Number(cfg.posX) : 50;
+      const posY = cfg.posY !== undefined ? Number(cfg.posY) : 50;
+      const flip = Boolean(cfg.flip);
+      const showColor = Boolean(cfg.showColor);
+      const brs = cfg.brightness !== undefined ? Number(cfg.brightness) : 100;
+      const con = cfg.contrast !== undefined ? Number(cfg.contrast) : 100;
+      const sat = cfg.saturate !== undefined ? Number(cfg.saturate) : 100;
+      const hue = cfg.hue !== undefined ? Number(cfg.hue) : 0;
+      const customValues = (cfg.customValues && typeof cfg.customValues === 'object') ? cfg.customValues : {};
+
+      weInspector.innerHTML = `
+        <div style="height: 125px; width: 100%; border-radius: 9px; background: #141418 ${prevUrl ? `url('${prevUrl}') center/cover no-repeat` : ''}; border: 1px solid rgba(255,255,255,0.12); flex-shrink: 0;"></div>
+        <div>
+          <div style="font-size: 14px; font-weight: 600; color: #ffffff; word-break: break-word;">${escapeHtml(catalogItem.title)}</div>
+          <div style="font-size: 11.5px; color: #a1a1aa; margin-top: 2px;">${escapeHtml(String(catalogItem.category || catalogItem.type).toUpperCase())} • ID ${escapeHtml(catalogItem.id)}</div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.09);">
+          <span style="font-size: 12.5px; font-weight: 600; color: #e4e4e7;">Wallpaper Settings</span>
+          <button id="agy-insp-reset" type="button" style="padding: 3px 8px; border-radius: 6px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14); color: #d4d4d8; font-size: 11px; cursor: pointer;">↻ Mặc định</button>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 9px; font-size: 12px; color: #d4d4d8;">
+          <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+            <span>▶ Tốc độ (Speed)</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <input id="agy-insp-speed" type="range" min="25" max="200" value="${speed}" style="width: 95px; cursor: pointer; accent-color: ${mainTheme.primary}; height: 4px;" />
+              <span id="agy-insp-speed-val" style="min-width: 32px; text-align: right;">${speed}</span>
+            </div>
+          </label>
+
+          <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+            <span>🖼 Căn chỉnh</span>
+            <select id="agy-insp-fit" style="background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.16); border-radius: 6px; padding: 4px 8px; color: #f4f4f5; font-size: 12px; width: 132px;">
+              <option value="cover" ${fit === 'cover' ? 'selected' : ''}>Cover</option>
+              <option value="contain" ${fit === 'contain' ? 'selected' : ''}>Contain (Fit)</option>
+              <option value="fill" ${fit === 'fill' ? 'selected' : ''}>Stretch (Fill)</option>
+              <option value="none" ${fit === 'none' ? 'selected' : ''}>Center</option>
+            </select>
+          </label>
+
+          <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+            <span>↔ Vị trí ngang</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <input id="agy-insp-posx" type="range" min="0" max="100" value="${posX}" style="width: 95px; cursor: pointer; accent-color: ${mainTheme.primary}; height: 4px;" />
+              <span id="agy-insp-posx-val" style="min-width: 32px; text-align: right;">${posX}</span>
+            </div>
+          </label>
+
+          <label style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+            <span>↕ Vị trí dọc</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <input id="agy-insp-posy" type="range" min="0" max="100" value="${posY}" style="width: 95px; cursor: pointer; accent-color: ${mainTheme.primary}; height: 4px;" />
+              <span id="agy-insp-posy-val" style="min-width: 32px; text-align: right;">${posY}</span>
+            </div>
+          </label>
+
+          <label style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+            <span>⇄ Lật ngang (Flip)</span>
+            <input id="agy-insp-flip" type="checkbox" ${flip ? 'checked' : ''} style="width: 15px; height: 15px; accent-color: ${mainTheme.primary}; cursor: pointer;" />
+          </label>
+
+          <label style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+            <span>🎨 Hiển thị tuỳ chỉnh màu</span>
+            <input id="agy-insp-color-toggle" type="checkbox" ${showColor ? 'checked' : ''} style="width: 15px; height: 15px; accent-color: ${mainTheme.primary}; cursor: pointer;" />
+          </label>
+
+          <div id="agy-insp-color-box" style="display: ${showColor ? 'flex' : 'none'}; flex-direction: column; gap: 7px; padding: 8px 10px; border-radius: 8px; background: rgba(0,0,0,0.28); border: 1px solid rgba(255,255,255,0.08);">
+            <label style="display: flex; justify-content: space-between; align-items: center;">
+              <span>Độ sáng</span>
+              <input id="agy-insp-brs" type="range" min="50" max="150" value="${brs}" style="width: 105px; accent-color: ${mainTheme.primary}; height: 4px;" />
+            </label>
+            <label style="display: flex; justify-content: space-between; align-items: center;">
+              <span>Tương phản</span>
+              <input id="agy-insp-con" type="range" min="50" max="150" value="${con}" style="width: 105px; accent-color: ${mainTheme.primary}; height: 4px;" />
+            </label>
+            <label style="display: flex; justify-content: space-between; align-items: center;">
+              <span>Bão hoà màu</span>
+              <input id="agy-insp-sat" type="range" min="0" max="200" value="${sat}" style="width: 105px; accent-color: ${mainTheme.primary}; height: 4px;" />
+            </label>
+            <label style="display: flex; justify-content: space-between; align-items: center;">
+              <span>Đổi tông (Hue)</span>
+              <input id="agy-insp-hue" type="range" min="0" max="360" value="${hue}" style="width: 105px; accent-color: ${mainTheme.primary}; height: 4px;" />
+            </label>
+          </div>
+        </div>
+
+        ${customProps.length ? `
+          <div style="padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.09); display: flex; flex-direction: column; gap: 9px;">
+            <div style="font-size: 12px; font-weight: 600; color: #a1a1aa;">Thuộc tính riêng của hình nền</div>
+            ${customProps.map(p => {
+              const curVal = customValues[p.key] !== undefined ? customValues[p.key] : p.value;
+              if (p.type === 'bool') {
+                return `
+                  <label style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #e4e4e7; cursor: pointer;">
+                    <span>${escapeHtml(p.text)}</span>
+                    <input class="agy-insp-cprop" data-key="${escapeHtml(p.key)}" data-type="bool" type="checkbox" ${curVal ? 'checked' : ''} style="width: 15px; height: 15px; accent-color: ${mainTheme.primary}; cursor: pointer;" />
+                  </label>
+                `;
+              }
+              if (p.type === 'slider') {
+                return `
+                  <label style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #e4e4e7; gap: 8px;">
+                    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(p.text)}</span>
+                    <input class="agy-insp-cprop" data-key="${escapeHtml(p.key)}" data-type="slider" type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${Number(curVal) || 0}" style="width: 105px; accent-color: ${mainTheme.primary}; height: 4px; cursor: pointer;" />
+                  </label>
+                `;
+              }
+              if (p.type === 'combo' && p.options.length) {
+                return `
+                  <label style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #e4e4e7; gap: 8px;">
+                    <span>${escapeHtml(p.text)}</span>
+                    <select class="agy-insp-cprop" data-key="${escapeHtml(p.key)}" data-type="combo" style="background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.16); border-radius: 6px; padding: 3px 6px; color: #f4f4f5; font-size: 11.5px; max-width: 130px;">
+                      ${p.options.map(opt => `<option value="${escapeHtml(opt.value)}" ${String(curVal) === String(opt.value) ? 'selected' : ''}>${escapeHtml(opt.label || opt.value)}</option>`).join('')}
+                    </select>
+                  </label>
+                `;
+              }
+              return '';
+            }).join('')}
+          </div>
+        ` : ''}
+      `;
+
+      function patchLiveSettings(patch, rebuildScene = false) {
+        const latest = getState().liveWp;
+        if (!latest) return;
+        const nextSettings = { ...(latest.settings || {}), ...patch };
+        const nextLive = { ...catalogItem, ...latest, settings: nextSettings };
+        if (!rebuildScene) {
+          const layer = document.getElementById('agy-live-wp-layer');
+          if (layer) {
+            const isDx11 = nextLive.category === 'scene' || nextLive.type === 'image';
+            const mUrl = buildMediaUrl(nextLive.id, nextLive.relFile);
+            layer.dataset.mediaKey = `${nextLive.category || nextLive.type}|${nextLive.id}|${mUrl}|${isDx11 ? JSON.stringify(nextSettings.customValues || {}) : ''}`;
+          }
+        }
+        applyTheme({ liveWp: nextLive });
+      }
+
+      const resetInsp = weInspector.querySelector('#agy-insp-reset');
+      if (resetInsp) {
+        resetInsp.addEventListener('click', () => {
+          const latest = getState().liveWp;
+          if (!latest) return;
+          applyTheme({ liveWp: { ...catalogItem, settings: {} } });
+          renderWeInspector();
+        });
+      }
+
+      const spEl = weInspector.querySelector('#agy-insp-speed');
+      const spVal = weInspector.querySelector('#agy-insp-speed-val');
+      if (spEl) {
+        spEl.addEventListener('input', (e) => {
+          const v = parseInt(e.target.value, 10);
+          if (spVal) spVal.textContent = String(v);
+          patchLiveSettings({ speed: v }, false);
+        });
+      }
+
+      const fitEl = weInspector.querySelector('#agy-insp-fit');
+      if (fitEl) {
+        fitEl.addEventListener('change', (e) => patchLiveSettings({ fit: e.target.value }, false));
+      }
+
+      const pxEl = weInspector.querySelector('#agy-insp-posx');
+      const pxVal = weInspector.querySelector('#agy-insp-posx-val');
+      if (pxEl) {
+        pxEl.addEventListener('input', (e) => {
+          const v = parseInt(e.target.value, 10);
+          if (pxVal) pxVal.textContent = String(v);
+          patchLiveSettings({ posX: v }, false);
+        });
+      }
+
+      const pyEl = weInspector.querySelector('#agy-insp-posy');
+      const pyVal = weInspector.querySelector('#agy-insp-posy-val');
+      if (pyEl) {
+        pyEl.addEventListener('input', (e) => {
+          const v = parseInt(e.target.value, 10);
+          if (pyVal) pyVal.textContent = String(v);
+          patchLiveSettings({ posY: v }, false);
+        });
+      }
+
+      const flipEl = weInspector.querySelector('#agy-insp-flip');
+      if (flipEl) {
+        flipEl.addEventListener('change', (e) => patchLiveSettings({ flip: e.target.checked }, false));
+      }
+
+      const colTog = weInspector.querySelector('#agy-insp-color-toggle');
+      const colBox = weInspector.querySelector('#agy-insp-color-box');
+      if (colTog && colBox) {
+        colTog.addEventListener('change', (e) => {
+          colBox.style.display = e.target.checked ? 'flex' : 'none';
+          patchLiveSettings({ showColor: e.target.checked }, false);
+        });
+      }
+
+      ['brs', 'con', 'sat', 'hue'].forEach(k => {
+        const mapKey = { brs: 'brightness', con: 'contrast', sat: 'saturate', hue: 'hue' }[k];
+        const el = weInspector.querySelector('#agy-insp-' + k);
+        if (el) {
+          el.addEventListener('input', (e) => patchLiveSettings({ [mapKey]: parseInt(e.target.value, 10) }, false));
+        }
+      });
+
+      weInspector.querySelectorAll('.agy-insp-cprop').forEach(el => {
+        el.addEventListener('change', () => {
+          const key = el.dataset.key;
+          const pType = el.dataset.type;
+          const val = pType === 'bool' ? el.checked : (pType === 'slider' ? Number(el.value) : el.value);
+          const latest = getState().liveWp;
+          const prevCustom = (latest && latest.settings && latest.settings.customValues) || {};
+          patchLiveSettings({ customValues: { ...prevCustom, [key]: val } }, true);
+        });
+      });
+    }
 
     if (wePauseBlurToggle) {
       wePauseBlurToggle.addEventListener('change', (e) => {
@@ -2230,8 +2559,10 @@
           updateWeOffButton(item);
           if (wpToggle) wpToggle.checked = true;
           renderWeCards(weSearch ? weSearch.value : '');
+          renderWeInspector();
         });
       });
+      renderWeInspector();
     }
 
     if (weOffBtn) {
