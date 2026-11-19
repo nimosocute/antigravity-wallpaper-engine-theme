@@ -477,9 +477,7 @@
 
     const isDx11Scene = live.category === 'scene' || live.type === 'image';
     const wpCfg = (live && live.settings && typeof live.settings === 'object') ? live.settings : {};
-    const effVol = wpCfg.volume !== undefined
-      ? Number(wpCfg.volume)
-      : (live.savedWeProps && live.savedWeProps.volume !== undefined ? Number(live.savedWeProps.volume) : 68);
+    const effVol = wpCfg.volume !== undefined ? Number(wpCfg.volume) : 0;
     const dxPropsObj = { ...(wpCfg.customValues || {}) };
     if (wpCfg.audioRecording !== undefined) dxPropsObj.__audioprocessing = Boolean(wpCfg.audioRecording);
     if (wpCfg.schemeColor) dxPropsObj.__schemecolor = String(wpCfg.schemeColor);
@@ -593,7 +591,7 @@
     const posY = wpCfg.posY !== undefined ? Number(wpCfg.posY) : 50;
     const flipH = Boolean(wpCfg.flip);
     const speedPct = wpCfg.speed !== undefined ? Number(wpCfg.speed) : 100;
-    const volPct = wpCfg.volume !== undefined ? Number(wpCfg.volume) : 68;
+    const volPct = wpCfg.volume !== undefined ? Number(wpCfg.volume) : 0;
     const mouseParallax = wpCfg.mouseParallax !== undefined ? Boolean(wpCfg.mouseParallax) : true;
     const imgFilter = wpCfg.imageFilter || 'none';
     const showCol = Boolean(wpCfg.showColor);
@@ -2291,9 +2289,7 @@
         ? Boolean(cfg.audioRecording)
         : (savedWe.audioprocessing !== undefined ? Boolean(savedWe.audioprocessing) : Boolean(catalogItem.supportsAudio));
       const schemeColor = cfg.schemeColor || catalogItem.schemeColor || '#19191d';
-      const volume = cfg.volume !== undefined
-        ? Number(cfg.volume)
-        : (savedWe.volume !== undefined ? Number(savedWe.volume) : 68);
+      const volume = cfg.volume !== undefined ? Number(cfg.volume) : 0;
       const speed = cfg.speed !== undefined ? Number(cfg.speed) : 100;
       const mouseParallax = cfg.mouseParallax !== undefined ? Boolean(cfg.mouseParallax) : true;
       const fit = cfg.fit || 'cover';

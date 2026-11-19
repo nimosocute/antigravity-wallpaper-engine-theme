@@ -409,38 +409,37 @@ def main() -> None:
                 break
 
     existing_hwnd = find_agy_bg_window()
-    if existing_hwnd and (pj_changed or props_json):
+    if existing_hwnd and pj_changed:
         # Force wallpaper64.exe to reload the updated project.json properties into AGY_BG
         close_agy_bg_window()
         for _ in range(15):
-            time.sleep(0.08)
+            time.sleep(0.06)
             if not find_agy_bg_window():
                 break
 
+    off_y = max(3000, int(user32.GetSystemMetrics(77)) + int(user32.GetSystemMetrics(79)) + 1000)
     cmd = (
         f'"{exe}" -control openWallpaper -file "{project_json}" '
-        f'-playInWindow "AGY_BG" -width 1920 -height 1080 -borderless'
+        f'-playInWindow "AGY_BG" -x 0 -y {off_y} -width 1920 -height 1080 -borderless'
     )
     spawn_on_default_desktop(cmd, str(we_dir))
-    time.sleep(0.35)
 
     hwnd = 0
-    for _ in range(25):
+    for _ in range(80):
         hwnd = find_agy_bg_window()
         if hwnd:
             break
-        time.sleep(0.12)
+        time.sleep(0.02)
 
     if not hwnd:
         print(json.dumps({"ok": False, "error": "WPEOverlappedWallpaper AGY_BG window not created"}))
         return
 
     cloak_agy_bg_window(hwnd)
-    if vol_arg:
-        try:
-            set_we_audio_volume(int(float(vol_arg)))
-        except Exception:
-            pass
+    try:
+        set_we_audio_volume(int(float(vol_arg)) if vol_arg else 0)
+    except Exception:
+        pass
     print(
         json.dumps(
             {
