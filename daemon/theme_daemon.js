@@ -1322,15 +1322,15 @@ function getInstallTargets() {
 function probeCodexPort() {
     if (process.platform !== 'win32') return null;
     try {
-        const allowRelaunch = getInstallTargets().has('codex') && Date.now() - lastCodexRelaunch > 20000;
+        const allowRelaunch = getInstallTargets().has('codex') && Date.now() - lastCodexRelaunch > 25000;
         const psScript = allowRelaunch
-            ? "$p = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -EA 0 | Where-Object { (Get-Process -Id $_.OwningProcess -EA 0).ProcessName -eq 'ChatGPT' } | Select-Object -First 1 -ExpandProperty LocalPort; if ($p) { $p } else { $main = Get-CimInstance Win32_Process -Filter \"Name='ChatGPT.exe'\" -EA 0 | Where-Object { $_.CommandLine -notmatch '--type=' } | Select-Object -First 1; if ($main -and $main.CommandLine -notmatch 'remote-debugging-port') { $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\\WindowsApps\\chatgpt-desktop.exe'; if (Test-Path $alias) { Stop-Process -Name 'ChatGPT' -Force -EA 0; Start-Sleep -Milliseconds 400; Start-Process -FilePath $alias -ArgumentList '--remote-debugging-port=0'; Write-Output 'RELAUNCHED' } } }"
-            : "Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -EA 0 | Where-Object { (Get-Process -Id $_.OwningProcess -EA 0).ProcessName -eq 'ChatGPT' } | Select-Object -First 1 -ExpandProperty LocalPort";
+            ? "$p = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -EA 0 | Where-Object { (Get-Process -Id $_.OwningProcess -EA 0).ProcessName -match '^ChatGPT|chatgpt-desktop' } | Select-Object -First 1 -ExpandProperty LocalPort; if ($p) { $p } else { $procs = Get-CimInstance Win32_Process -Filter \"Name='ChatGPT.exe' OR Name='chatgpt-desktop.exe'\" -EA 0; $hasFlag = $procs | Where-Object { $_.CommandLine -match 'remote-debugging-port' } | Select-Object -First 1; if (-not $hasFlag) { $main = $procs | Where-Object { $_.Name -eq 'ChatGPT.exe' -and $_.CommandLine -notmatch '--type=' -and $_.CreationDate -lt (Get-Date).AddSeconds(-4) } | Select-Object -First 1; if ($main) { $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\\WindowsApps\\chatgpt-desktop.exe'; if (Test-Path $alias) { Get-Process -Name 'ChatGPT' -EA 0 | ForEach-Object { try { $_.CloseMainWindow() | Out-Null } catch {} }; Start-Sleep -Milliseconds 600; Stop-Process -Name 'ChatGPT' -Force -EA 0; for ($i=0; $i -lt 10 -and (Get-Process -Name 'ChatGPT' -EA 0); $i++) { Start-Sleep -Milliseconds 200 }; Start-Process -FilePath $alias -ArgumentList '--remote-debugging-port=0'; Write-Output 'RELAUNCHED' } } } }"
+            : "Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -EA 0 | Where-Object { (Get-Process -Id $_.OwningProcess -EA 0).ProcessName -match '^ChatGPT|chatgpt-desktop' } | Select-Object -First 1 -ExpandProperty LocalPort";
         const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
         const out = execFileSync(
             'powershell.exe',
             ['-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
-            { encoding: 'utf8', timeout: 6000, windowsHide: true }
+            { encoding: 'utf8', timeout: 7000, windowsHide: true }
         ).trim();
         if (out === 'RELAUNCHED') {
             lastCodexRelaunch = Date.now();
