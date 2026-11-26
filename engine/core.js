@@ -932,12 +932,17 @@
   }
 
   function scheduleSaveConfig(st) {
-    if (!window.agySaveThemeConfig) return;
+    if (!window.agySaveThemeConfig || window.__AGY_SUPPRESS_SAVE__) return;
+    let json = '';
+    try { json = JSON.stringify(st); } catch (e) { return; }
+    if (json === window.__AGY_LAST_SAVED_CFG__) return;
     if (window.__AGY_SAVE_CFG_TIMER__) clearTimeout(window.__AGY_SAVE_CFG_TIMER__);
     window.__AGY_SAVE_CFG_TIMER__ = setTimeout(() => {
       window.__AGY_SAVE_CFG_TIMER__ = 0;
+      if (window.__AGY_SUPPRESS_SAVE__) return;
       try {
-        window.agySaveThemeConfig(JSON.stringify(st));
+        window.__AGY_LAST_SAVED_CFG__ = json;
+        window.agySaveThemeConfig(json);
       } catch (e) {}
     }, 120);
   }
@@ -1859,8 +1864,24 @@
   window.__ANTIGRAVITY_APPLY_CUSTOM_THEME__ = applyTheme;
   window.__ANTIGRAVITY_REMOVE_CUSTOM_THEME__ = removeCustomTheme;
   window.__ANTIGRAVITY_OPEN_THEME_MODAL__ = openCustomThemeModal;
+  window.__ANTIGRAVITY_SYNC_EXTERNAL_CONFIG__ = (cfg) => {
+    if (!cfg || typeof cfg !== 'object') return;
+    window.__AGY_SUPPRESS_SAVE__ = true;
+    try {
+      applyTheme(cfg);
+      window.__AGY_LAST_SAVED_CFG__ = JSON.stringify(getState());
+    } finally {
+      window.__AGY_SUPPRESS_SAVE__ = false;
+    }
+  };
 
-  applyTheme();
+  window.__AGY_SUPPRESS_SAVE__ = true;
+  try {
+    applyTheme();
+    window.__AGY_LAST_SAVED_CFG__ = JSON.stringify(getState());
+  } finally {
+    window.__AGY_SUPPRESS_SAVE__ = false;
+  }
 
   function openCustomThemeModal() {
     let backdrop = document.getElementById('agy-custom-theme-modal-backdrop');

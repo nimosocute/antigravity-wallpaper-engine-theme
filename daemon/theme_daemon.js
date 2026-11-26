@@ -1248,10 +1248,15 @@ function createSession(target) {
         if (msg.method === 'Runtime.bindingCalled' && msg.params && msg.params.name === 'agySaveThemeConfig') {
             try {
                 const payload = JSON.parse(msg.params.payload || '{}');
-                saveConfig(payload);
-                for (const other of sessions.values()) {
-                    if (other.id !== target.id) {
-                        other.reinject();
+                const prevJson = JSON.stringify(readConfig());
+                const saved = saveConfig(payload);
+                const nextJson = JSON.stringify(saved);
+                if (prevJson !== nextJson) {
+                    const syncExpr = `window.__ANTIGRAVITY_SYNC_EXTERNAL_CONFIG__&&window.__ANTIGRAVITY_SYNC_EXTERNAL_CONFIG__(${nextJson})`;
+                    for (const other of sessions.values()) {
+                        if (other.id !== target.id) {
+                            other.send('Runtime.evaluate', { expression: syncExpr, awaitPromise: false }).catch(() => {});
+                        }
                     }
                 }
             } catch (err) {
