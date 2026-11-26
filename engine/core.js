@@ -2,6 +2,18 @@
   const THEMES = /*__THEMES_PLACEHOLDER__*/{};
   const THEME_KEYS = Object.keys(THEMES);
   const DEFAULT_THEME_KEY = THEME_KEYS[0] || 'Default';
+  const IS_CODEX = typeof location !== 'undefined' && location.protocol === 'app:';
+
+  function ensureCodexShell() {
+    if (!IS_CODEX) return null;
+    let shell = document.querySelector('.agy-shell');
+    if (shell && shell.isConnected) return shell;
+    const candidate = document.querySelector('#root div[class*="--app-shell-left-panel-width"]')
+      || document.querySelector('#root > div.contents > div')
+      || document.getElementById('root');
+    if (candidate) candidate.classList.add('agy-shell');
+    return candidate;
+  }
 
   const STORAGE_THEME = 'agy_theme_v3';
   const STORAGE_BUBBLE = 'agy_bubble_v3';
@@ -79,9 +91,63 @@
     return { themeName, bubbleName, inputStyle, dimming, wpEnabled, customWp, userAvatar, agentAvatar, glassBlur, avatarSize, avatarRadius, liveWp, livePauseBlur, liveAudio };
   }
 
-  function buildMediaUrl(id, relFile) {
+  function agyFetchJson(apiPath) {
     const base = window.__AGY_MEDIA_BASE__ || '';
+    if (!IS_CODEX && base) {
+      return fetch(`${base}${apiPath}`).then(r => r.json());
+    }
+    if (typeof window.agyBridgeCall === 'function') {
+      return new Promise((resolve, reject) => {
+        window.__AGY_BRIDGE_PENDING__ = window.__AGY_BRIDGE_PENDING__ || {};
+        const reqId = 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        window.__AGY_BRIDGE_RESOLVE__ = (id, bodyStr) => {
+          const cb = window.__AGY_BRIDGE_PENDING__[id];
+          if (!cb) return;
+          delete window.__AGY_BRIDGE_PENDING__[id];
+          try { cb.resolve(JSON.parse(bodyStr || '{}')); } catch (e) { cb.reject(e); }
+        };
+        const t = setTimeout(() => {
+          if (window.__AGY_BRIDGE_PENDING__[reqId]) {
+            delete window.__AGY_BRIDGE_PENDING__[reqId];
+            reject(new Error('Bridge timeout'));
+          }
+        }, 26000);
+        window.__AGY_BRIDGE_PENDING__[reqId] = {
+          resolve: (v) => { clearTimeout(t); resolve(v); },
+          reject: (e) => { clearTimeout(t); reject(e); }
+        };
+        window.agyBridgeCall(JSON.stringify({ reqId, path: apiPath }));
+      });
+    }
+    return base ? fetch(`${base}${apiPath}`).then(r => r.json()) : Promise.reject(new Error('No media base'));
+  }
+
+  function resolveCodexMediaUrl(id, relFile, cb) {
+    if (!id || !relFile) return;
+    window.__AGY_CODEX_MEDIA_CACHE__ = window.__AGY_CODEX_MEDIA_CACHE__ || {};
+    const k = `${id}|${relFile}`;
+    if (window.__AGY_CODEX_MEDIA_CACHE__[k]) {
+      cb(window.__AGY_CODEX_MEDIA_CACHE__[k]);
+      return;
+    }
+    agyFetchJson(`/api/we/media-data?id=${encodeURIComponent(id)}&file=${encodeURIComponent(relFile)}`)
+      .then((res) => {
+        if (res && res.ok && res.dataUrl) {
+          window.__AGY_CODEX_MEDIA_CACHE__[k] = res.dataUrl;
+          cb(res.dataUrl);
+        }
+      })
+      .catch(() => {});
+  }
+
+  function buildMediaUrl(id, relFile) {
+    const base = IS_CODEX ? 'https://agy-local.invalid' : (window.__AGY_MEDIA_BASE__ || '');
     if (!base || !id || !relFile) return '';
+    if (IS_CODEX) {
+      window.__AGY_CODEX_MEDIA_CACHE__ = window.__AGY_CODEX_MEDIA_CACHE__ || {};
+      const cached = window.__AGY_CODEX_MEDIA_CACHE__[`${id}|${relFile}`];
+      if (cached) return cached;
+    }
     const encoded = String(relFile).split('/').map(seg => encodeURIComponent(seg)).join('/');
     return `${base}/we/${encodeURIComponent(id)}/${encoded}`;
   }
@@ -298,22 +364,18 @@
     }
     rebuildParticles();
 
-    const base = window.__AGY_MEDIA_BASE__ || '';
-    if (base) {
-      fetch(`${base}/api/we/scene-manifest?id=${encodeURIComponent(live.id)}`)
-        .then(r => r.json())
-        .then(data => {
-          if (destroyed || !data || !data.ok) return;
-          cfg.windStrength = Number(data.windStrength) || 0.65;
-          cfg.waterStrength = Number(data.waterStrength) || 0.25;
-          cfg.shimmerStrength = Number(data.shimmerStrength) || 0.45;
-          if (Array.isArray(data.particles) && data.particles.length) {
-            cfg.particles = data.particles;
-            rebuildParticles();
-          }
-        })
-        .catch(() => {});
-    }
+    agyFetchJson(`/api/we/scene-manifest?id=${encodeURIComponent(live.id)}`)
+      .then(data => {
+        if (destroyed || !data || !data.ok) return;
+        cfg.windStrength = Number(data.windStrength) || 0.65;
+        cfg.waterStrength = Number(data.waterStrength) || 0.25;
+        cfg.shimmerStrength = Number(data.shimmerStrength) || 0.45;
+        if (Array.isArray(data.particles) && data.particles.length) {
+          cfg.particles = data.particles;
+          rebuildParticles();
+        }
+      })
+      .catch(() => {});
 
     const t0 = performance.now();
     function renderFrame(now) {
@@ -446,7 +508,7 @@
   }
 
   function syncLiveWallpaper(st, mainTheme, overlayRgb, overlayAlpha) {
-    const shell = document.querySelector('.agy-shell');
+    const shell = ensureCodexShell() || document.querySelector('.agy-shell');
     const existing = document.getElementById('agy-live-wp-layer');
     const live = st.wpEnabled && st.liveWp && st.liveWp.id && st.liveWp.relFile ? st.liveWp : null;
     const mediaUrl = live ? buildMediaUrl(live.id, live.relFile) : '';
@@ -456,8 +518,7 @@
       if (existing) {
         stopVideoElement(existing.querySelector('video'));
         existing.remove();
-        const base = window.__AGY_MEDIA_BASE__ || '';
-        if (base) fetch(`${base}/api/we/activate-scene?id=close`).catch(() => {});
+        agyFetchJson(`/api/we/activate-scene?id=close`).catch(() => {});
       }
       return false;
     }
@@ -486,7 +547,7 @@
     if (layer.dataset.mediaKey !== mediaKey) {
       layer.dataset.mediaKey = mediaKey;
       const base = window.__AGY_MEDIA_BASE__ || '';
-      const useDx11Stream = isDx11Scene && Boolean(base && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function');
+      const useDx11Stream = !IS_CODEX && isDx11Scene && Boolean(base && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function');
 
       if (!useDx11Stream) {
         stopStandaloneSceneEngine();
@@ -529,8 +590,7 @@
             ? `&props=${encodeURIComponent(customValsJson)}`
             : '';
           const volParam = `&volume=${Math.max(0, Math.min(100, Math.round(Number.isFinite(effVol) ? effVol : 0)))}`;
-          fetch(`${base}/api/we/activate-scene?id=${encodeURIComponent(live.id)}${propsParam}${volParam}&slot=${nextSlot}&_t=${Date.now()}`)
-            .then(r => r.json())
+          agyFetchJson(`/api/we/activate-scene?id=${encodeURIComponent(live.id)}${propsParam}${volParam}&slot=${nextSlot}&_t=${Date.now()}`)
             .then(async (data) => {
               const curLayer = document.getElementById('agy-live-wp-layer');
               if (!curLayer || curLayer.dataset.mediaKey !== reqKey) return;
@@ -586,7 +646,7 @@
                         el.remove();
                       });
                       if (prevSlot && prevSlot !== nextSlot) {
-                        fetch(`${base}/api/we/activate-scene?id=close&slot=${prevSlot}`).catch(() => {});
+                        agyFetchJson(`/api/we/activate-scene?id=close&slot=${prevSlot}`).catch(() => {});
                       }
                     }, 260);
                   };
@@ -665,12 +725,21 @@
               }
             });
         } else {
-          mountStandaloneSceneEngine(layer, live, mediaUrl);
+          if (IS_CODEX && mediaUrl.startsWith('https://agy-local.invalid/')) {
+            resolveCodexMediaUrl(live.id, live.relFile, (dataUrl) => {
+              const curLayer = document.getElementById('agy-live-wp-layer');
+              if (!curLayer || curLayer.dataset.mediaKey !== reqKey) return;
+              const sc = curLayer.querySelector('#agy-live-wp-scrim');
+              mountStandaloneSceneEngine(curLayer, live, dataUrl);
+              if (sc) curLayer.appendChild(sc);
+            });
+          } else {
+            mountStandaloneSceneEngine(layer, live, mediaUrl);
+          }
         }
       } else {
         const video = document.createElement('video');
         video.id = 'agy-live-wp-video';
-        video.src = mediaUrl;
         video.autoplay = true;
         video.loop = true;
         video.muted = true;
@@ -678,9 +747,19 @@
         video.preload = 'auto';
         video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;display:block;';
         layer.appendChild(video);
-        const playPromise = video.play();
-        if (playPromise && typeof playPromise.catch === 'function') {
-          playPromise.catch(() => {});
+        if (IS_CODEX && mediaUrl.startsWith('https://agy-local.invalid/')) {
+          resolveCodexMediaUrl(live.id, live.relFile, (dataUrl) => {
+            if (!video.isConnected) return;
+            video.src = dataUrl;
+            const p = video.play();
+            if (p && typeof p.catch === 'function') p.catch(() => {});
+          });
+        } else {
+          video.src = mediaUrl;
+          const playPromise = video.play();
+          if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch(() => {});
+          }
         }
       }
 
@@ -756,8 +835,7 @@
         window.__AGY_LAST_WE_VOL__ = targetVol;
         if (window.__AGY_VOL_TIMER__) clearTimeout(window.__AGY_VOL_TIMER__);
         window.__AGY_VOL_TIMER__ = setTimeout(() => {
-          const base = window.__AGY_MEDIA_BASE__ || '';
-          if (base) fetch(`${base}/api/we/set-volume?volume=${targetVol}`).catch(() => {});
+          agyFetchJson(`/api/we/set-volume?volume=${targetVol}`).catch(() => {});
         }, 50);
       }
     }
@@ -1503,8 +1581,45 @@
       }
     `;
 
+    const codexCss = IS_CODEX ? `
+      /* Codex App Desktop shell transparency & themed composer/cards */
+      .agy-shell main,
+      .agy-shell .bg-surface,
+      .agy-shell [class*="bg-(--header-tint)"],
+      .agy-shell div.h-toolbar-sm {
+        background: transparent !important;
+        background-color: transparent !important;
+      }
+      .agy-shell aside.app-shell-left-panel {
+        background: ${useUnifiedGlass ? 'transparent' : sidebarBg} !important;
+      }
+      .agy-shell [class*="ComposerLayoutBody-"] {
+        background: ${st.inputStyle === 'glass' ? (bubbleTheme.inputGlassBg || 'rgba(20, 15, 13, 0.56)') : (bubbleTheme.inputCardBg || 'rgba(26, 18, 15, 0.88)')} !important;
+        border: 1px solid ${bubbleTheme.borderColor || 'rgba(255, 255, 255, 0.16)'} !important;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 0 12px ${bubbleTheme.glow || 'rgba(0,0,0,0.2)'} !important;
+        border-radius: 16px !important;
+      }
+      .agy-shell [class*="item-pgg3ON"] {
+        background: ${mainTheme.aiCardBg || 'rgba(18, 18, 22, 0.68)'} !important;
+        border: 1px solid ${mainTheme.aiCardBorder || 'rgba(255, 255, 255, 0.12)'} !important;
+      }
+      .agy-shell [data-message-author-role="user"] {
+        background: ${bubbleTheme.bg || 'rgba(30, 24, 22, 0.82)'} !important;
+        border: 1px solid ${bubbleTheme.borderColor || 'rgba(255, 255, 255, 0.16)'} !important;
+        border-radius: 14px !important;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28), 0 0 10px ${bubbleTheme.glow || 'transparent'} !important;
+      }
+      .agy-shell [data-message-author-role="assistant"] {
+        background: ${mainTheme.aiCardBg || 'rgba(18, 18, 22, 0.72)'} !important;
+        border: 1px solid ${mainTheme.aiCardBorder || 'rgba(255, 255, 255, 0.1)'} !important;
+        border-radius: 14px !important;
+        padding: 12px 16px !important;
+      }
+    ` : '';
+
     styleEl.textContent = `
       ${wpCss}
+      ${codexCss}
 
       /* Translucent themed sidebar (unified via ::before when unifiedGlass is active) */
       ${sidebarOuterCss}
@@ -1798,20 +1913,14 @@
       const killRestoreBtn = backdrop.querySelector('#agy-kill-restore-btn');
       if (killRestoreBtn) {
         killRestoreBtn.addEventListener('click', () => {
-          const base = window.__AGY_MEDIA_BASE__ || '';
-          if (base) {
-            fetch(`${base}/api/theme/kill?mode=session`).catch(() => {});
-          }
+          agyFetchJson(`/api/theme/kill?mode=session`).catch(() => {});
           removeCustomTheme();
         });
       }
       const killUninstallBtn = backdrop.querySelector('#agy-kill-uninstall-btn');
       if (killUninstallBtn) {
         killUninstallBtn.addEventListener('click', () => {
-          const base = window.__AGY_MEDIA_BASE__ || '';
-          if (base) {
-            fetch(`${base}/api/theme/kill?mode=uninstall`).catch(() => {});
-          }
+          agyFetchJson(`/api/theme/kill?mode=uninstall`).catch(() => {});
           removeCustomTheme();
         });
       }
@@ -2388,7 +2497,11 @@
       const catalogItem = weAllItems.find(x => x.id === curLive.id) || curLive;
       const customProps = Array.isArray(catalogItem.customProps) ? catalogItem.customProps : [];
       const savedWe = (catalogItem.savedWeProps && typeof catalogItem.savedWeProps === 'object') ? catalogItem.savedWeProps : {};
-      const prevUrl = catalogItem.previewFile ? buildMediaUrl(catalogItem.id, catalogItem.previewFile) : '';
+      const codexCache = (typeof window !== 'undefined' && window.__AGY_CODEX_MEDIA_CACHE__) ? window.__AGY_CODEX_MEDIA_CACHE__ : null;
+      const prevCacheKey = catalogItem.previewFile ? `${catalogItem.id}|${catalogItem.previewFile}` : '';
+      const prevUrl = catalogItem.previewFile
+        ? (IS_CODEX ? ((codexCache && codexCache[prevCacheKey]) || '') : buildMediaUrl(catalogItem.id, catalogItem.previewFile))
+        : '';
       const cfg = (curLive.settings && typeof curLive.settings === 'object') ? curLive.settings : {};
 
       const audioRecording = cfg.audioRecording !== undefined
@@ -2444,7 +2557,7 @@
           #agy-we-inspector .we-sel { width: 146px; background: #2b2d33; border: 1px solid rgba(255,255,255,0.12); border-radius: 4px; padding: 4px 8px; color: #e4e6eb; font-size: 12px; outline: none; cursor: pointer; }
         </style>
 
-        <div style="position: relative; height: 162px; width: 100%; border-radius: 6px; overflow: hidden; background: #141519 ${prevUrl ? `url('${prevUrl}') center/cover no-repeat` : ''}; flex-shrink: 0;">
+        <div id="agy-we-inspector-prev" style="position: relative; height: 162px; width: 100%; border-radius: 6px; overflow: hidden; background: #141519 ${prevUrl ? `url('${prevUrl}') center/cover no-repeat` : ''}; flex-shrink: 0;">
           <div style="position: absolute; inset: 0; background: linear-gradient(180deg, rgba(28,29,33,0) 55%, rgba(28,29,33,0.92) 100%);"></div>
         </div>
 
@@ -2684,6 +2797,16 @@
         applyTheme({ liveWp: nextLive });
       }
 
+      if (IS_CODEX && catalogItem.previewFile && !prevUrl) {
+        const inspPrev = weInspector.querySelector('#agy-we-inspector-prev');
+        if (inspPrev) {
+          resolveCodexMediaUrl(catalogItem.id, catalogItem.previewFile, (dataUrl) => {
+            if (!dataUrl || !inspPrev.isConnected) return;
+            inspPrev.style.background = `#141519 url('${dataUrl}') center/cover no-repeat`;
+          });
+        }
+      }
+
       const favBtn = weInspector.querySelector('#agy-insp-fav-btn');
       if (favBtn) {
         favBtn.addEventListener('click', () => {
@@ -2714,8 +2837,7 @@
       const openDirBtn = weInspector.querySelector('#agy-insp-open-dir');
       if (openDirBtn) {
         openDirBtn.addEventListener('click', () => {
-          const base = window.__AGY_MEDIA_BASE__ || '';
-          if (base) fetch(`${base}/api/we/open-folder?id=${encodeURIComponent(catalogItem.id)}`).catch(() => {});
+          agyFetchJson(`/api/we/open-folder?id=${encodeURIComponent(catalogItem.id)}`).catch(() => {});
           if (ctxMenu) ctxMenu.style.display = 'none';
         });
       }
@@ -2978,9 +3100,13 @@
         weGrid.innerHTML = `<div style="grid-column: 1 / -1; padding: 32px; font-size: 13px; color: #a1a1aa; border: 1px dashed rgba(255,255,255,0.14); border-radius: 12px; text-align: center;">No matching wallpapers found in this category.</div>`;
         return;
       }
+      const codexCache = (typeof window !== 'undefined' && window.__AGY_CODEX_MEDIA_CACHE__) ? window.__AGY_CODEX_MEDIA_CACHE__ : null;
       weGrid.innerHTML = list.map(it => {
         const isSel = Boolean(curLive && curLive.id === it.id);
-        const prevUrl = it.previewFile ? buildMediaUrl(it.id, it.previewFile) : '';
+        const prevCacheKey = it.previewFile ? `${it.id}|${it.previewFile}` : '';
+        const prevUrl = it.previewFile
+          ? (IS_CODEX ? ((codexCache && codexCache[prevCacheKey]) || '') : buildMediaUrl(it.id, it.previewFile))
+          : '';
         let badgeText = 'VIDEO';
         let badgeBg = 'rgba(56, 189, 248, 0.32)';
         let badgeColor = '#7dd3fc';
@@ -2999,7 +3125,7 @@
         }
         return `
           <div class="agy-we-card" data-we-id="${escapeHtml(it.id)}" style="border-radius: 11px; border: ${isSel ? '2px solid #fbbf24' : '1px solid rgba(255, 255, 255, 0.12)'}; background: rgba(14, 12, 12, 0.88); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; box-shadow: ${isSel ? '0 0 16px rgba(251, 191, 36, 0.35)' : '0 4px 12px rgba(0,0,0,0.35)'}; transition: transform 0.14s ease, border-color 0.15s ease;">
-            <div style="height: 124px; width: 100%; position: relative; background: #141418 ${prevUrl ? `url('${prevUrl}') center/cover no-repeat` : ''};">
+            <div class="agy-we-card-thumb" data-we-id="${escapeHtml(it.id)}" data-we-prev="${escapeHtml(it.previewFile || '')}" style="height: 124px; width: 100%; position: relative; background: #141418 ${prevUrl ? `url('${prevUrl}') center/cover no-repeat` : ''};">
               <div style="position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.05) 0%, rgba(10,10,14,0.78) 100%);"></div>
               <span style="position: absolute; top: 7px; left: 7px; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; padding: 2px 7px; border-radius: 9999px; background: ${badgeBg}; color: ${badgeColor}; border: 1px solid rgba(255,255,255,0.16); backdrop-filter: none;">${badgeText}</span>
               <div class="agy-we-check-slot" style="position: absolute; top: 7px; right: 7px;">${isSel ? CHECK_SVG : ''}</div>
@@ -3021,6 +3147,40 @@
           renderWeInspector();
         });
       });
+
+      if (IS_CODEX) {
+        if (window.__AGY_WE_CARD_OBSERVER__) {
+          try { window.__AGY_WE_CARD_OBSERVER__.disconnect(); } catch (e) {}
+        }
+        const loadThumb = (el) => {
+          const id = el.dataset.weId;
+          const prevFile = el.dataset.wePrev;
+          if (!id || !prevFile || el.dataset.weLoaded === '1') return;
+          el.dataset.weLoaded = '1';
+          resolveCodexMediaUrl(id, prevFile, (dataUrl) => {
+            if (!dataUrl || !el.isConnected) return;
+            el.style.background = `#141418 url('${dataUrl}') center/cover no-repeat`;
+          });
+        };
+        if (typeof IntersectionObserver !== 'undefined') {
+          const obs = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+              if (entry.isIntersecting) {
+                obs.unobserve(entry.target);
+                loadThumb(entry.target);
+              }
+            });
+          }, { root: weGrid.parentElement || null, rootMargin: '180px' });
+          window.__AGY_WE_CARD_OBSERVER__ = obs;
+          weGrid.querySelectorAll('.agy-we-card-thumb').forEach(el => {
+            if (el.dataset.wePrev && (!codexCache || !codexCache[`${el.dataset.weId}|${el.dataset.wePrev}`])) {
+              obs.observe(el);
+            }
+          });
+        } else {
+          weGrid.querySelectorAll('.agy-we-card-thumb').forEach(loadThumb);
+        }
+      }
       renderWeInspector();
     }
 
@@ -3042,8 +3202,7 @@
         return;
       }
       if (weStatus) weStatus.textContent = 'Scanning Wallpaper Engine folder...';
-      fetch(`${mediaBase}/api/we/list?${force ? 'refresh=1&' : ''}_t=${Date.now()}`)
-        .then(r => r.json())
+      agyFetchJson(`/api/we/list?${force ? 'refresh=1&' : ''}_t=${Date.now()}`)
         .then(data => {
           weAllItems = Array.isArray(data.items) ? data.items : [];
           updateCatPillCounts();
@@ -3125,6 +3284,23 @@
   function injectMainSidebarButton() {
     if (document.getElementById('agy-custom-theme-sidebar-btn')) return;
 
+    if (IS_CODEX) {
+      const menubar = document.querySelector('[role="menubar"]');
+      if (!menubar) return;
+      const btn = document.createElement('button');
+      btn.id = 'agy-custom-theme-sidebar-btn';
+      btn.type = 'button';
+      btn.className = 'no-drag rounded-md border border-transparent px-2.5 py-1 text-base font-normal leading-none outline-none text-tertiary hover:text-primary cursor-pointer select-none';
+      btn.style.cssText = 'display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:#fbbf24;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.28);margin-left:4px;';
+      btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg><span>Custom theme</span>`;
+      menubar.appendChild(btn);
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.__ANTIGRAVITY_OPEN_THEME_MODAL__();
+      });
+      return;
+    }
+
     const splitLeft = document.querySelector('[data-testid="sidebar-split"]')?.firstElementChild;
     const candidates = [splitLeft, ...Array.from(document.querySelectorAll('.bg-sidebar'))].filter(Boolean);
     let customSpan = null;
@@ -3205,11 +3381,11 @@
   }
 
   function syncShellMetrics() {
-    const shell = document.querySelector('.agy-shell');
+    const shell = ensureCodexShell() || document.querySelector('.agy-shell');
     if (!shell) return;
     const split = shell.querySelector('[data-testid="sidebar-split"]');
-    const sidebarPane = split ? split.firstElementChild : null;
-    const titleBar = shell.querySelector('[class*="@container/titlebar"]');
+    const sidebarPane = IS_CODEX ? shell.querySelector('aside.app-shell-left-panel') : (split ? split.firstElementChild : null);
+    const titleBar = IS_CODEX ? shell.querySelector('div.h-toolbar-sm') : shell.querySelector('[class*="@container/titlebar"]');
     const sw = sidebarPane ? Math.round(sidebarPane.getBoundingClientRect().width) : 0;
     const shellRect = shell.getBoundingClientRect();
     const hdrBottom = titleBar ? Math.round(titleBar.getBoundingClientRect().bottom - shellRect.top) : 35;
@@ -3299,6 +3475,7 @@
   }
 
   function tick() {
+    ensureCodexShell();
     injectMainSidebarButton();
     injectSettingsModalButton();
     hookSidebarScroll();

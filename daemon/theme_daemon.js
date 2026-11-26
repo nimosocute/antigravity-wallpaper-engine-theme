@@ -680,6 +680,60 @@ function startMediaServer() {
             return;
         }
 
+        if (pathname === '/api/we/media-data') {
+            const id = String(parsedUrl.searchParams.get('id') || '').trim();
+            const relFile = String(parsedUrl.searchParams.get('file') || '').trim();
+            const wsDir = resolveWeWorkshopDir();
+            if (!wsDir || !/^[a-zA-Z0-9_-]+$/.test(id) || !relFile) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false }));
+                return;
+            }
+            try {
+                if (relFile === '__pkg__') {
+                    const catalog = scanWallpaperEngineItems(false);
+                    const found = catalog.items.find((x) => x.id === id && x.pkgSlice);
+                    const pkgPath = path.join(wsDir, id, 'scene.pkg');
+                    if (!found || !fs.existsSync(pkgPath) || found.pkgSlice.length > 28 * 1024 * 1024) {
+                        res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false }));
+                        return;
+                    }
+                    const fd = fs.openSync(pkgPath, 'r');
+                    const buf = Buffer.alloc(found.pkgSlice.length);
+                    fs.readSync(fd, buf, 0, buf.length, found.pkgSlice.offset);
+                    fs.closeSync(fd);
+                    const mime = found.pkgSlice.mime || 'application/octet-stream';
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: true, dataUrl: `data:${mime};base64,${buf.toString('base64')}` }));
+                    return;
+                }
+                const itemDir = path.join(wsDir, id);
+                const fullPath = path.resolve(itemDir, relFile);
+                if (!fullPath.startsWith(itemDir) || !fs.existsSync(fullPath)) {
+                    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false }));
+                    return;
+                }
+                const stat = fs.statSync(fullPath);
+                if (stat.size > 28 * 1024 * 1024) {
+                    res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false, error: 'Too large' }));
+                    return;
+                }
+                const ext = path.extname(fullPath).toLowerCase();
+                const mime = MIME_TYPES[ext] || 'application/octet-stream';
+                const buf = fs.readFileSync(fullPath);
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: true, dataUrl: `data:${mime};base64,${buf.toString('base64')}` }));
+                return;
+            } catch (_) {
+                res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false }));
+                return;
+            }
+        }
+
         if (pathname === '/api/we/open-folder') {
             const id = String(parsedUrl.searchParams.get('id') || '').trim();
             const wsDir = resolveWeWorkshopDir();
@@ -1165,6 +1219,32 @@ function createSession(target) {
             return;
         }
 
+        if (msg.method === 'Runtime.bindingCalled' && msg.params && msg.params.name === 'agyBridgeCall') {
+            try {
+                const req = JSON.parse(msg.params.payload || '{}');
+                const reqId = req.reqId;
+                const reqPath = String(req.path || '');
+                if (reqId && reqPath.startsWith('/') && mediaPort) {
+                    http.get(`http://127.0.0.1:${mediaPort}${reqPath}`, (r) => {
+                        let body = '';
+                        r.on('data', (c) => { body += c; });
+                        r.on('end', () => {
+                            send('Runtime.evaluate', {
+                                expression: `window.__AGY_BRIDGE_RESOLVE__&&window.__AGY_BRIDGE_RESOLVE__(${JSON.stringify(reqId)},${JSON.stringify(body)})`,
+                                awaitPromise: false,
+                            }).catch(() => {});
+                        });
+                    }).on('error', (err) => {
+                        send('Runtime.evaluate', {
+                            expression: `window.__AGY_BRIDGE_RESOLVE__&&window.__AGY_BRIDGE_RESOLVE__(${JSON.stringify(reqId)},${JSON.stringify(JSON.stringify({ ok: false, error: err.message }))})`,
+                            awaitPromise: false,
+                        }).catch(() => {});
+                    });
+                }
+            } catch (_) {}
+            return;
+        }
+
         if (msg.method === 'Runtime.bindingCalled' && msg.params && msg.params.name === 'agySaveThemeConfig') {
             try {
                 const payload = JSON.parse(msg.params.payload || '{}');
@@ -1194,6 +1274,7 @@ function createSession(target) {
             } catch (_) {}
             try {
                 await send('Runtime.addBinding', { name: 'agySaveThemeConfig' });
+                await send('Runtime.addBinding', { name: 'agyBridgeCall' });
             } catch (_) {}
 
             const src = buildInjectedSource();
@@ -1220,50 +1301,95 @@ function createSession(target) {
     ws.addEventListener('error', cleanup);
 }
 
+let codexPort = null;
+let lastCodexProbe = 0;
+
+function probeCodexPort() {
+    if (process.platform !== 'win32') return null;
+    try {
+        const out = execFileSync(
+            'powershell.exe',
+            [
+                '-NoProfile',
+                '-WindowStyle',
+                'Hidden',
+                '-Command',
+                "Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -EA 0 | Where-Object { (Get-Process -Id $_.OwningProcess -EA 0).ProcessName -eq 'ChatGPT' } | Select-Object -First 1 -ExpandProperty LocalPort",
+            ],
+            { encoding: 'utf8', timeout: 2500, windowsHide: true }
+        ).trim();
+        const p = parseInt(out, 10);
+        return Number.isFinite(p) && p > 0 ? p : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+async function fetchCodexPages() {
+    if (process.platform !== 'win32') return [];
+    if (!codexPort && Date.now() - lastCodexProbe > 6000) {
+        lastCodexProbe = Date.now();
+        codexPort = probeCodexPort();
+    }
+    if (!codexPort) return [];
+    try {
+        const targets = await fetchJson(`http://127.0.0.1:${codexPort}/json`);
+        if (!Array.isArray(targets)) return [];
+        return targets.filter((t) => t && t.type === 'page' && t.webSocketDebuggerUrl && String(t.url || '').startsWith('app://'));
+    } catch (_) {
+        codexPort = null;
+        return [];
+    }
+}
+
 async function scanPages() {
     totalScans++;
+    const codexPages = await fetchCodexPages();
     const info = getPortInfo();
+    let agyPages = [];
     if (!info) {
         consecutivePortFailures++;
         if (consecutivePortFailures === 2 && !hasEverAttached) {
             ensureWindowsShortcutsAndRelaunchIfNeeded();
         }
-        if ((hasEverAttached && consecutivePortFailures >= 2) || totalScans > 40) {
+        if (codexPages.length === 0 && ((hasEverAttached && consecutivePortFailures >= 2) || totalScans > 40)) {
             shutdown('Antigravity DevToolsActivePort unavailable');
+            return;
         }
-        return;
+    } else {
+        if (lastPort !== null && lastPort !== info.port) {
+            for (const s of sessions.values()) {
+                if (!String(s.target?.url || '').startsWith('app://')) {
+                    try {
+                        s.ws.close();
+                    } catch (_) {}
+                    sessions.delete(s.id);
+                }
+            }
+        }
+        lastPort = info.port;
+
+        try {
+            const targets = await fetchJson(`http://127.0.0.1:${info.port}/json`);
+            consecutivePortFailures = 0;
+            if (Array.isArray(targets)) {
+                agyPages = targets.filter((t) => {
+                    if (!t || t.type !== 'page' || !t.webSocketDebuggerUrl) return false;
+                    const url = String(t.url || '');
+                    if (url.startsWith('devtools://') || url.startsWith('chrome-extension://')) return false;
+                    return url.includes('127.0.0.1') || url.includes('workbench') || url.includes('launchpad');
+                });
+            }
+        } catch (_) {
+            consecutivePortFailures++;
+            if (codexPages.length === 0 && ((hasEverAttached && consecutivePortFailures >= 2) || (totalScans > 25 && consecutivePortFailures >= 4))) {
+                shutdown('Antigravity closed (CDP port unreachable)');
+                return;
+            }
+        }
     }
 
-    if (lastPort !== null && lastPort !== info.port) {
-        for (const s of sessions.values()) {
-            try {
-                s.ws.close();
-            } catch (_) {}
-        }
-        sessions.clear();
-    }
-    lastPort = info.port;
-
-    let targets;
-    try {
-        targets = await fetchJson(`http://127.0.0.1:${info.port}/json`);
-        consecutivePortFailures = 0;
-    } catch (_) {
-        consecutivePortFailures++;
-        if ((hasEverAttached && consecutivePortFailures >= 2) || (totalScans > 25 && consecutivePortFailures >= 4)) {
-            shutdown('Antigravity closed (CDP port unreachable)');
-        }
-        return;
-    }
-    if (!Array.isArray(targets)) return;
-
-    const pages = targets.filter((t) => {
-        if (!t || t.type !== 'page' || !t.webSocketDebuggerUrl) return false;
-        const url = String(t.url || '');
-        if (url.startsWith('devtools://') || url.startsWith('chrome-extension://')) return false;
-        return url.includes('127.0.0.1') || url.includes('workbench') || url.includes('launchpad');
-    });
-
+    const pages = [...agyPages, ...codexPages];
     const liveIds = new Set(pages.map((p) => p.id));
     for (const [id, session] of sessions.entries()) {
         if (!liveIds.has(id)) {

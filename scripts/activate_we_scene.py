@@ -415,7 +415,34 @@ def main() -> None:
             if is_we_running():
                 break
 
+    slot_state_file = Path(sys.executable).parent / ".agy_slot_state.json" if False else (Path.home() / ".gemini" / "config" / "skills" / "antigravity-custom-theme" / ".agy_slot_state.json")
+    slot_state: dict[str, str] = {}
+    try:
+        if slot_state_file.is_file():
+            slot_state = json.loads(slot_state_file.read_text(encoding="utf-8"))
+    except Exception:
+        slot_state = {}
+
     existing_hwnd = find_agy_bg_window(slot)
+    if existing_hwnd and not pj_changed and slot_state.get(slot) == action:
+        cloak_agy_bg_window(existing_hwnd)
+        try:
+            set_we_audio_volume(int(float(vol_arg)) if vol_arg else 0)
+        except Exception:
+            pass
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "hwnd": existing_hwnd,
+                    "slot": slot,
+                    "reused": True,
+                    "sourceId": f"window:{existing_hwnd}:0",
+                }
+            )
+        )
+        return
+
     if existing_hwnd and pj_changed:
         # Force wallpaper64.exe to reload the updated project.json properties into this slot
         close_agy_bg_window(slot)
@@ -446,6 +473,11 @@ def main() -> None:
     # Wait for wallpaper64.exe to finish loading the new scene's first frame & D3D11 swapchain, then re-lock exact 1920x1080
     time.sleep(0.45)
     cloak_agy_bg_window(hwnd)
+    try:
+        slot_state[slot] = action
+        slot_state_file.write_text(json.dumps(slot_state), encoding="utf-8")
+    except Exception:
+        pass
     try:
         set_we_audio_volume(int(float(vol_arg)) if vol_arg else 0)
     except Exception:
