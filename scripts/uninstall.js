@@ -81,6 +81,10 @@ function removeAutoStart() {
                 console.log(`[uninstall] Removed Windows Startup shortcut: ${lnk}`);
             }
         }
+        try {
+            execSync('schtasks /Delete /TN AntigravityCodexCustomTheme /F', { stdio: 'ignore' });
+            console.log('[uninstall] Removed Scheduled Task: AntigravityCodexCustomTheme');
+        } catch (_) {}
         const targetsFile = path.join(ROOT_DIR, '.install-targets.json');
         if (fs.existsSync(targetsFile)) {
             fs.unlinkSync(targetsFile);

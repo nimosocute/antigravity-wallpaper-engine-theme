@@ -150,13 +150,24 @@ if (-not $NoStartup) {
     }
 
     if ($SelectedTargets -contains 'codex') {
-        # Register lightweight Windows Startup shortcut so shared theme_daemon.js is ready whenever Codex opens directly
+        # Register Windows Startup shortcut AND Scheduled Task so shared theme_daemon.js survives subshells & auto-starts at logon
         $StartupSc = $WshShell.CreateShortcut($CodexStartupLnk)
         $StartupSc.TargetPath = 'wscript.exe'
         $StartupSc.Arguments = "`"$VbsPath`""
         $StartupSc.WorkingDirectory = $RepoRoot
         $StartupSc.Save()
         Write-Host "[install-win] Registered Windows Startup for Codex auto-theming: $CodexStartupLnk"
+
+        try {
+            $TaskName = 'AntigravityCodexCustomTheme'
+            $Action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$VbsPath`"" -WorkingDirectory $RepoRoot
+            $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+            $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+            Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Force | Out-Null
+            Write-Host "[install-win] Registered Scheduled Task: $TaskName"
+        } catch {
+            Write-Warning "[install-win] Scheduled Task registration skipped: $($_.Exception.Message)"
+        }
 
         # Create/update direct Codex shortcuts (Start Menu & Desktop) with --remote-debugging-port=0
         $CodexAlias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\chatgpt-desktop.exe'
@@ -192,8 +203,17 @@ if (Test-Path $PidFile) {
     }
 }
 
-Write-Host "[install-win] Launching daemon via wscript.exe..."
-Start-Process -FilePath 'wscript.exe' -ArgumentList """$VbsPath""" -WorkingDirectory $RepoRoot
+Write-Host "[install-win] Launching daemon..."
+$StartedViaTask = $false
+if ($SelectedTargets -contains 'codex') {
+    try {
+        Start-ScheduledTask -TaskName 'AntigravityCodexCustomTheme' -ErrorAction Stop
+        $StartedViaTask = $true
+    } catch {}
+}
+if (-not $StartedViaTask) {
+    Start-Process -FilePath 'wscript.exe' -ArgumentList """$VbsPath""" -WorkingDirectory $RepoRoot
+}
 
 for ($i = 0; $i -lt 15; $i++) {
     Start-Sleep -Milliseconds 250
