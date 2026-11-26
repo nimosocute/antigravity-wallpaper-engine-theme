@@ -1303,21 +1303,40 @@ function createSession(target) {
 
 let codexPort = null;
 let lastCodexProbe = 0;
+let lastCodexRelaunch = 0;
+
+function getInstallTargets() {
+    try {
+        const p = path.join(ROOT_DIR, '.install-targets.json');
+        if (fs.existsSync(p)) {
+            const raw = fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, '');
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed && parsed.targets) && parsed.targets.length) {
+                return new Set(parsed.targets.map((t) => String(t).toLowerCase()));
+            }
+        }
+    } catch (_) {}
+    return new Set(['antigravity']);
+}
 
 function probeCodexPort() {
     if (process.platform !== 'win32') return null;
     try {
+        const allowRelaunch = getInstallTargets().has('codex') && Date.now() - lastCodexRelaunch > 20000;
+        const psScript = allowRelaunch
+            ? "$p = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -EA 0 | Where-Object { (Get-Process -Id $_.OwningProcess -EA 0).ProcessName -eq 'ChatGPT' } | Select-Object -First 1 -ExpandProperty LocalPort; if ($p) { $p } else { $main = Get-CimInstance Win32_Process -Filter \"Name='ChatGPT.exe'\" -EA 0 | Where-Object { $_.CommandLine -notmatch '--type=' } | Select-Object -First 1; if ($main -and $main.CommandLine -notmatch 'remote-debugging-port') { $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\\WindowsApps\\chatgpt-desktop.exe'; if (Test-Path $alias) { Stop-Process -Name 'ChatGPT' -Force -EA 0; Start-Sleep -Milliseconds 400; Start-Process -FilePath $alias -ArgumentList '--remote-debugging-port=0'; Write-Output 'RELAUNCHED' } } }"
+            : "Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -EA 0 | Where-Object { (Get-Process -Id $_.OwningProcess -EA 0).ProcessName -eq 'ChatGPT' } | Select-Object -First 1 -ExpandProperty LocalPort";
+        const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
         const out = execFileSync(
             'powershell.exe',
-            [
-                '-NoProfile',
-                '-WindowStyle',
-                'Hidden',
-                '-Command',
-                "Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -EA 0 | Where-Object { (Get-Process -Id $_.OwningProcess -EA 0).ProcessName -eq 'ChatGPT' } | Select-Object -First 1 -ExpandProperty LocalPort",
-            ],
-            { encoding: 'utf8', timeout: 2500, windowsHide: true }
+            ['-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
+            { encoding: 'utf8', timeout: 6000, windowsHide: true }
         ).trim();
+        if (out === 'RELAUNCHED') {
+            lastCodexRelaunch = Date.now();
+            log('Relaunched Codex App with --remote-debugging-port=0 for auto-theming.');
+            return null;
+        }
         const p = parseInt(out, 10);
         return Number.isFinite(p) && p > 0 ? p : null;
     } catch (_) {
@@ -1327,7 +1346,7 @@ function probeCodexPort() {
 
 async function fetchCodexPages() {
     if (process.platform !== 'win32') return [];
-    if (!codexPort && Date.now() - lastCodexProbe > 6000) {
+    if (!codexPort && Date.now() - lastCodexProbe > 4000) {
         lastCodexProbe = Date.now();
         codexPort = probeCodexPort();
     }
@@ -1344,15 +1363,17 @@ async function fetchCodexPages() {
 
 async function scanPages() {
     totalScans++;
+    const installTargets = getInstallTargets();
+    const codexEnabled = installTargets.has('codex');
     const codexPages = await fetchCodexPages();
     const info = getPortInfo();
     let agyPages = [];
     if (!info) {
         consecutivePortFailures++;
-        if (consecutivePortFailures === 2 && !hasEverAttached) {
+        if (consecutivePortFailures === 2 && !hasEverAttached && installTargets.has('antigravity')) {
             ensureWindowsShortcutsAndRelaunchIfNeeded();
         }
-        if (codexPages.length === 0 && ((hasEverAttached && consecutivePortFailures >= 2) || totalScans > 40)) {
+        if (!codexEnabled && codexPages.length === 0 && ((hasEverAttached && consecutivePortFailures >= 2) || totalScans > 40)) {
             shutdown('Antigravity DevToolsActivePort unavailable');
             return;
         }
@@ -1382,7 +1403,7 @@ async function scanPages() {
             }
         } catch (_) {
             consecutivePortFailures++;
-            if (codexPages.length === 0 && ((hasEverAttached && consecutivePortFailures >= 2) || (totalScans > 25 && consecutivePortFailures >= 4))) {
+            if (!codexEnabled && codexPages.length === 0 && ((hasEverAttached && consecutivePortFailures >= 2) || (totalScans > 25 && consecutivePortFailures >= 4))) {
                 shutdown('Antigravity closed (CDP port unreachable)');
                 return;
             }

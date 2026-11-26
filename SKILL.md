@@ -17,10 +17,13 @@ If the user pastes or shares this repository URL (`https://github.com/nimosocute
 2. **Build the Runtime Payload:**
    - From inside the installed skill directory, run `python scripts/build_payload.py` (or `python3 scripts/build_payload.py`).
    - Run `node --check dist/theme_payload.js` and `node --check daemon/theme_daemon.js`.
-3. **Register Native Antigravity Sidecar & Start Daemon:**
-   - **Windows:** Run `powershell -ExecutionPolicy Bypass -File scripts/install-win.ps1` (registers the native sidecar at `~/.gemini/config/plugins/antigravity-custom-theme-plugin/sidecars/theme-engine/sidecar.json` and launches the daemon).
+3. **Choose Target App(s) & Register Auto-Start / Sidecar:**
+   - Supports **Antigravity**, **Codex App (Windows Desktop)**, or **Both** (sharing 1 single `theme_daemon.js`, 1 `dist/theme_payload.js`, and 1 Workshop media cache with zero duplicate processes).
+   - **Windows:** Run `powershell -ExecutionPolicy Bypass -File scripts/install-win.ps1 -Target both` (or `-Target antigravity` / `-Target codex`). Running without `-Target` interactively prompts `1 / 2 / 3`.
+     - `antigravity`: registers the native Antigravity sidecar (`~/.gemini/config/plugins/antigravity-custom-theme-plugin/...`) and patches Antigravity shortcuts with `--remote-debugging-port=0`.
+     - `codex`: registers Windows Startup (`CodexCustomTheme.lnk`), configures Start Menu / Desktop `Codex.lnk` with `--remote-debugging-port=0`, and enables automatic upgrade/attach when Codex App (`ChatGPT.exe`) is opened directly.
    - **macOS / Linux:** Run `bash scripts/install-unix.sh`.
-   - If the daemon process is killed when a synchronous tool subshell exits on Windows, launch `node daemon/theme_daemon.js` with `IsDaemon: true` so it stays attached for the active session while the registered Native Sidecar handles all future Antigravity launches automatically.
+   - If the daemon process is killed when a synchronous tool subshell exits on Windows, launch `node daemon/theme_daemon.js` with `IsDaemon: true` so it stays attached for the active session.
 4. **Verify Live via CDP & Report Ready:**
    - Run `node scripts/verify_cdp.js` and confirm `themeActive: true` and `hasLiveBlurRule: false`.
    - Tell the user the theme is active and they can open **Custom Theme Studio** anytime via **`✨ Custom theme`** (under `Customizations` in the left sidebar) or by pressing **`Alt + Shift + T`**.

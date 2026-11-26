@@ -1,5 +1,7 @@
 param(
-    [switch]$NoStartup
+    [switch]$NoStartup,
+    [ValidateSet('', 'antigravity', 'codex', 'both')]
+    [string]$Target = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,6 +13,34 @@ $PayloadJs = Join-Path $RepoRoot 'dist\theme_payload.js'
 $BuildPy = Join-Path $RepoRoot 'scripts\build_payload.py'
 $PidFile = Join-Path $RepoRoot 'daemon.pid'
 $VbsPath = Join-Path $RepoRoot 'silent-start.vbs'
+$TargetsFile = Join-Path $RepoRoot '.install-targets.json'
+
+if ([string]::IsNullOrWhiteSpace($Target)) {
+    if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+        Write-Host ""
+        Write-Host "Select target app(s) for Custom Theme:" -ForegroundColor Cyan
+        Write-Host "  [1] Antigravity only"
+        Write-Host "  [2] Codex App only (auto-starts shared daemon & enables direct launch)"
+        Write-Host "  [3] Both Antigravity & Codex App (shared daemon, minimal RAM/CPU) [default]"
+        $choice = Read-Host "Enter choice (1/2/3)"
+        switch ($choice.Trim()) {
+            '1' { $Target = 'antigravity' }
+            '2' { $Target = 'codex' }
+            default { $Target = 'both' }
+        }
+    } else {
+        $Target = 'both'
+    }
+}
+
+$SelectedTargets = switch ($Target.ToLower()) {
+    'antigravity' { @('antigravity') }
+    'codex'       { @('codex') }
+    default       { @('antigravity', 'codex') }
+}
+$TargetsJson = @{ targets = $SelectedTargets } | ConvertTo-Json -Depth 3
+[System.IO.File]::WriteAllText($TargetsFile, $TargetsJson, [System.Text.UTF8Encoding]::new($false))
+Write-Host "[install-win] Configured target(s): $($SelectedTargets -join ', ')"
 
 $NodeCmd = Get-Command node -ErrorAction SilentlyContinue
 if (-not $NodeCmd) {
@@ -69,50 +99,85 @@ if (-not $NoStartup) {
         Write-Host "[install-win] Removed legacy Windows Startup shortcut: $OldShortcutPath"
     }
 
-    # Register native Antigravity Plugin Sidecar so Antigravity auto-starts the daemon on launch and kills it on exit
-    $PluginRoot = Join-Path $env:USERPROFILE '.gemini\config\plugins\antigravity-custom-theme-plugin'
-    $SidecarDir = Join-Path $PluginRoot 'sidecars\theme-engine'
-    New-Item -ItemType Directory -Path $SidecarDir -Force | Out-Null
-
-    $PluginJson = @{
-        name = 'antigravity-custom-theme-plugin'
-        description = 'Auto-starts and auto-stops the Antigravity Custom Theme & Live Wallpaper Engine daemon alongside Antigravity.'
-    } | ConvertTo-Json -Depth 4
-    Set-Content -Path (Join-Path $PluginRoot 'plugin.json') -Value $PluginJson -Encoding UTF8
-
-    $SidecarJson = @{
-        command = 'node'
-        args = @($DaemonJs)
-        restart_policy = 'always'
-        display_name = 'Custom Theme Engine'
-        description = 'Background CDP theme injector and Wallpaper Engine local media server.'
-        has_web_ui = $true
-        ui_config = @{
-            display_name = 'Custom Theme Engine'
-            views = @()
-        }
-    } | ConvertTo-Json -Depth 5
-    Set-Content -Path (Join-Path $SidecarDir 'sidecar.json') -Value $SidecarJson -Encoding UTF8
-    Write-Host "[install-win] Registered native Antigravity sidecar: $(Join-Path $SidecarDir 'sidecar.json')"
-
-    # Ensure Antigravity shortcuts include --remote-debugging-port=0 (required on Antigravity >= 2.33.0)
     $WshShell = New-Object -ComObject WScript.Shell
-    $AgyShortcuts = @(
-        (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity.lnk'),
-        (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Antigravity.lnk'),
-        (Join-Path $env:USERPROFILE 'Desktop\Antigravity.lnk')
-    )
-    foreach ($LnkPath in $AgyShortcuts) {
-        if (Test-Path $LnkPath) {
-            try {
-                $Sc = $WshShell.CreateShortcut($LnkPath)
-                if ($Sc.Arguments -notmatch 'remote-debugging-port') {
-                    $Sc.Arguments = ("--remote-debugging-port=0 " + $Sc.Arguments).Trim()
-                    $Sc.Save()
-                    Write-Host "[install-win] Enabled --remote-debugging-port=0 on shortcut: $LnkPath"
-                }
-            } catch {}
+    $CodexStartupLnk = Join-Path $StartupDir 'CodexCustomTheme.lnk'
+
+    if ($SelectedTargets -contains 'antigravity') {
+        # Register native Antigravity Plugin Sidecar so Antigravity auto-starts the daemon on launch and kills it on exit
+        $PluginRoot = Join-Path $env:USERPROFILE '.gemini\config\plugins\antigravity-custom-theme-plugin'
+        $SidecarDir = Join-Path $PluginRoot 'sidecars\theme-engine'
+        New-Item -ItemType Directory -Path $SidecarDir -Force | Out-Null
+
+        $PluginJson = @{
+            name = 'antigravity-custom-theme-plugin'
+            description = 'Auto-starts and auto-stops the Antigravity Custom Theme & Live Wallpaper Engine daemon alongside Antigravity.'
+        } | ConvertTo-Json -Depth 4
+        Set-Content -Path (Join-Path $PluginRoot 'plugin.json') -Value $PluginJson -Encoding UTF8
+
+        $SidecarJson = @{
+            command = 'node'
+            args = @($DaemonJs)
+            restart_policy = 'always'
+            display_name = 'Custom Theme Engine'
+            description = 'Background CDP theme injector and Wallpaper Engine local media server.'
+            has_web_ui = $true
+            ui_config = @{
+                display_name = 'Custom Theme Engine'
+                views = @()
+            }
+        } | ConvertTo-Json -Depth 5
+        Set-Content -Path (Join-Path $SidecarDir 'sidecar.json') -Value $SidecarJson -Encoding UTF8
+        Write-Host "[install-win] Registered native Antigravity sidecar: $(Join-Path $SidecarDir 'sidecar.json')"
+
+        # Ensure Antigravity shortcuts include --remote-debugging-port=0 (required on Antigravity >= 2.33.0)
+        $AgyShortcuts = @(
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity.lnk'),
+            (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Antigravity.lnk'),
+            (Join-Path $env:USERPROFILE 'Desktop\Antigravity.lnk')
+        )
+        foreach ($LnkPath in $AgyShortcuts) {
+            if (Test-Path $LnkPath) {
+                try {
+                    $Sc = $WshShell.CreateShortcut($LnkPath)
+                    if ($Sc.Arguments -notmatch 'remote-debugging-port') {
+                        $Sc.Arguments = ("--remote-debugging-port=0 " + $Sc.Arguments).Trim()
+                        $Sc.Save()
+                        Write-Host "[install-win] Enabled --remote-debugging-port=0 on shortcut: $LnkPath"
+                    }
+                } catch {}
+            }
         }
+    }
+
+    if ($SelectedTargets -contains 'codex') {
+        # Register lightweight Windows Startup shortcut so shared theme_daemon.js is ready whenever Codex opens directly
+        $StartupSc = $WshShell.CreateShortcut($CodexStartupLnk)
+        $StartupSc.TargetPath = 'wscript.exe'
+        $StartupSc.Arguments = "`"$VbsPath`""
+        $StartupSc.WorkingDirectory = $RepoRoot
+        $StartupSc.Save()
+        Write-Host "[install-win] Registered Windows Startup for Codex auto-theming: $CodexStartupLnk"
+
+        # Create/update direct Codex shortcuts (Start Menu & Desktop) with --remote-debugging-port=0
+        $CodexAlias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\chatgpt-desktop.exe'
+        if (Test-Path $CodexAlias) {
+            $CodexShortcuts = @(
+                (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Codex.lnk'),
+                (Join-Path $env:USERPROFILE 'Desktop\Codex.lnk')
+            )
+            foreach ($CodexLnk in $CodexShortcuts) {
+                try {
+                    $Sc = $WshShell.CreateShortcut($CodexLnk)
+                    $Sc.TargetPath = $CodexAlias
+                    $Sc.Arguments = '--remote-debugging-port=0'
+                    $Sc.WorkingDirectory = Split-Path -Parent $CodexAlias
+                    $Sc.Save()
+                    Write-Host "[install-win] Configured direct themed Codex shortcut: $CodexLnk"
+                } catch {}
+            }
+        }
+    } elseif (Test-Path $CodexStartupLnk) {
+        Remove-Item $CodexStartupLnk -Force -ErrorAction SilentlyContinue
     }
 }
 

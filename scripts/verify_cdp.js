@@ -133,28 +133,72 @@ const INSPECT_EXPR = `(() => {
     };
 })()`;
 
+const { execFileSync } = require('child_process');
+
+function probeCodexPort() {
+    if (process.platform !== 'win32') return null;
+    try {
+        const out = execFileSync(
+            'powershell.exe',
+            [
+                '-NoProfile',
+                '-WindowStyle',
+                'Hidden',
+                '-Command',
+                "Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -EA 0 | Where-Object { (Get-Process -Id $_.OwningProcess -EA 0).ProcessName -eq 'ChatGPT' } | Select-Object -First 1 -ExpandProperty LocalPort",
+            ],
+            { encoding: 'utf8', timeout: 2500, windowsHide: true }
+        ).trim();
+        const p = parseInt(out, 10);
+        return Number.isFinite(p) && p > 0 ? p : null;
+    } catch (_) {
+        return null;
+    }
+}
+
 async function main() {
-    const portFile = resolvePortFile();
-    if (!fs.existsSync(portFile)) {
-        console.error(`[verify-cdp] DevToolsActivePort not found at: ${portFile}`);
-        process.exit(1);
+    const argIdx = process.argv.indexOf('--target');
+    const targetMode = (argIdx !== -1 && process.argv[argIdx + 1]) ? process.argv[argIdx + 1].toLowerCase() : 'all';
+    const pages = [];
+
+    if (targetMode === 'all' || targetMode === 'antigravity') {
+        const portFile = resolvePortFile();
+        if (fs.existsSync(portFile)) {
+            try {
+                const port = parseInt(fs.readFileSync(portFile, 'utf8').trim().split(/\r?\n/)[0], 10);
+                const targets = await fetchJson(`http://127.0.0.1:${port}/json`);
+                for (const t of (Array.isArray(targets) ? targets : [])) {
+                    if (t && t.type === 'page' && t.webSocketDebuggerUrl && String(t.url || '').includes('127.0.0.1')) {
+                        pages.push({ app: 'antigravity', ...t });
+                    }
+                }
+            } catch (_) {}
+        }
     }
 
-    const port = parseInt(fs.readFileSync(portFile, 'utf8').trim().split(/\r?\n/)[0], 10);
-    const targets = await fetchJson(`http://127.0.0.1:${port}/json`);
-    const pages = (Array.isArray(targets) ? targets : []).filter(
-        (t) => t && t.type === 'page' && t.webSocketDebuggerUrl && String(t.url || '').includes('127.0.0.1')
-    );
+    if (targetMode === 'all' || targetMode === 'codex') {
+        const codexPort = probeCodexPort();
+        if (codexPort) {
+            try {
+                const targets = await fetchJson(`http://127.0.0.1:${codexPort}/json`);
+                for (const t of (Array.isArray(targets) ? targets : [])) {
+                    if (t && t.type === 'page' && t.webSocketDebuggerUrl && String(t.url || '').startsWith('app://')) {
+                        pages.push({ app: 'codex', ...t });
+                    }
+                }
+            } catch (_) {}
+        }
+    }
 
     if (pages.length === 0) {
-        console.error(`[verify-cdp] No Antigravity CDP page targets found on port ${port}.`);
+        console.error(`[verify-cdp] No running CDP page targets found (target=${targetMode}).`);
         process.exit(1);
     }
 
     const results = [];
     for (const page of pages) {
         const report = await evaluatePage(page.webSocketDebuggerUrl, INSPECT_EXPR);
-        results.push({ id: page.id, title: page.title, ...report });
+        results.push({ app: page.app, id: page.id, title: page.title, ...report });
     }
 
     console.log(JSON.stringify(results, null, 2));

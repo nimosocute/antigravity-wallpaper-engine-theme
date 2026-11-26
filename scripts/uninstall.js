@@ -74,10 +74,16 @@ function removeAutoStart() {
 
     if (process.platform === 'win32') {
         const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-        const lnk = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'AntigravityCustomTheme.lnk');
-        if (fs.existsSync(lnk)) {
-            fs.unlinkSync(lnk);
-            console.log(`[uninstall] Removed Windows Startup shortcut: ${lnk}`);
+        for (const name of ['AntigravityCustomTheme.lnk', 'CodexCustomTheme.lnk']) {
+            const lnk = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', name);
+            if (fs.existsSync(lnk)) {
+                fs.unlinkSync(lnk);
+                console.log(`[uninstall] Removed Windows Startup shortcut: ${lnk}`);
+            }
+        }
+        const targetsFile = path.join(ROOT_DIR, '.install-targets.json');
+        if (fs.existsSync(targetsFile)) {
+            fs.unlinkSync(targetsFile);
         }
         if (fs.existsSync(VBS_FILE)) {
             fs.unlinkSync(VBS_FILE);
