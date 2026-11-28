@@ -702,8 +702,8 @@ function startMediaServer() {
                             'ffmpeg',
                             [
                                 '-y', '-i', inputPath,
-                                '-vf', "scale='min(1920,iw)':-2",
-                                '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '24',
+                                '-vf', "scale='min(1920,iw)':-2:flags=fast_bilinear",
+                                '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'ultrafast', '-crf', '25',
                                 '-maxrate', '3.5M', '-bufsize', '7M',
                                 '-c:a', 'aac', '-b:a', '96k',
                                 '-fs', '22M', '-movflags', '+faststart',
