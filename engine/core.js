@@ -1743,6 +1743,15 @@
       .agy-shell aside.app-shell-left-panel {
         background: ${useUnifiedGlass ? 'transparent' : sidebarBg} !important;
       }
+      .agy-shell [class*="footer-"]::before,
+      .agy-shell [class*="footer-"]::after,
+      .agy-shell [class*="shiftWithTranscript-"]::before,
+      .agy-shell [class*="shiftWithTranscript-"]::after {
+        background: transparent !important;
+        background-color: transparent !important;
+        background-image: none !important;
+        display: none !important;
+      }
       .agy-shell [class*="ComposerLayoutRoot-"] {
         background: transparent !important;
         background-color: transparent !important;
@@ -1751,6 +1760,7 @@
         backdrop-filter: none !important;
         -webkit-backdrop-filter: none !important;
         position: relative !important;
+        overflow: visible !important;
       }
       .agy-shell [class*="ComposerLayoutBody-"] {
         background: ${st.inputStyle === 'glass' ? (bubbleTheme.inputGlassBg || 'rgba(20, 15, 13, 0.56)') : (bubbleTheme.inputCardBg || 'rgba(26, 18, 15, 0.88)')} !important;

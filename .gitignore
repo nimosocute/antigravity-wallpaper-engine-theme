@@ -3,6 +3,7 @@ dist/
 daemon.log
 daemon.pid
 theme_config.json
+codex_theme_config.json
 silent-start.vbs
 launch-codex.vbs
 .install-targets.json

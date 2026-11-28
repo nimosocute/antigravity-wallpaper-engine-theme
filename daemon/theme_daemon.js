@@ -21,6 +21,7 @@ if (typeof globalThis.WebSocket !== 'function') {
 const ROOT_DIR = path.resolve(__dirname, '..');
 const PID_FILE = path.join(ROOT_DIR, 'daemon.pid');
 const CONFIG_FILE = process.env.AGY_CONFIG_PATH || path.join(ROOT_DIR, 'theme_config.json');
+const CODEX_CONFIG_FILE = process.env.AGY_CODEX_CONFIG_PATH || path.join(ROOT_DIR, 'codex_theme_config.json');
 const DIST_DIR = path.join(ROOT_DIR, 'dist');
 const PAYLOAD_PATH = path.join(DIST_DIR, 'theme_payload.js');
 const LOG_FILE = path.join(ROOT_DIR, 'daemon.log');
@@ -1152,33 +1153,36 @@ function removePidLock() {
     } catch (_) {}
 }
 
-function readConfig() {
+function readConfig(isCodex = false) {
+    const file = isCodex ? CODEX_CONFIG_FILE : CONFIG_FILE;
     try {
-        if (fs.existsSync(CONFIG_FILE)) {
-            const parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+        const targetFile = fs.existsSync(file) ? file : (isCodex && fs.existsSync(CONFIG_FILE) ? CONFIG_FILE : file);
+        if (fs.existsSync(targetFile)) {
+            const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
             if (parsed && typeof parsed === 'object') {
                 return { ...DEFAULT_CONFIG, ...parsed };
             }
         }
     } catch (err) {
-        log(`Failed reading theme_config.json: ${err.message}`);
+        log(`Failed reading ${path.basename(file)}: ${err.message}`);
     }
     return { ...DEFAULT_CONFIG };
 }
 
-function saveConfig(next) {
+function saveConfig(next, isCodex = false) {
+    const file = isCodex ? CODEX_CONFIG_FILE : CONFIG_FILE;
     try {
-        const merged = { ...readConfig(), ...next };
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), 'utf8');
+        const merged = { ...readConfig(isCodex), ...next };
+        fs.writeFileSync(file, JSON.stringify(merged, null, 2), 'utf8');
         return merged;
     } catch (err) {
-        log(`Failed saving theme_config.json: ${err.message}`);
+        log(`Failed saving ${path.basename(file)}: ${err.message}`);
         return null;
     }
 }
 
 let missingPayloadLogged = false;
-function buildInjectedSource() {
+function buildInjectedSource(isCodex = false) {
     if (!fs.existsSync(PAYLOAD_PATH)) {
         if (!missingPayloadLogged) {
             log(`Payload not built yet (${PAYLOAD_PATH}). Run: python scripts/build_payload.py`);
@@ -1188,7 +1192,7 @@ function buildInjectedSource() {
     }
     missingPayloadLogged = false;
 
-    const cfgJson = JSON.stringify(readConfig());
+    const cfgJson = JSON.stringify(readConfig(isCodex));
     const mediaBase = mediaPort ? `http://127.0.0.1:${mediaPort}` : '';
     const payloadCode = fs.readFileSync(PAYLOAD_PATH, 'utf8');
     return `window.__AGY_INITIAL_CONFIG__ = ${cfgJson};\nwindow.__AGY_MEDIA_BASE__ = ${JSON.stringify(mediaBase)};\n${payloadCode}`;
@@ -1284,7 +1288,8 @@ function createSession(target) {
     const ws = new globalThis.WebSocket(target.webSocketDebuggerUrl);
     let nextId = 1;
     const pending = new Map();
-    const session = { id: target.id, ws, target };
+    const isCodexTarget = String(target.url || '').startsWith('app://');
+    const session = { id: target.id, ws, target, isCodex: isCodexTarget };
     sessions.set(target.id, session);
 
     function send(method, params = {}) {
@@ -1301,7 +1306,7 @@ function createSession(target) {
 
     session.send = send;
     session.reinject = async () => {
-        const src = buildInjectedSource();
+        const src = buildInjectedSource(isCodexTarget);
         if (!src) return;
         try {
             await send('Runtime.evaluate', { expression: src, awaitPromise: false });
@@ -1353,13 +1358,13 @@ function createSession(target) {
         if (msg.method === 'Runtime.bindingCalled' && msg.params && msg.params.name === 'agySaveThemeConfig') {
             try {
                 const payload = JSON.parse(msg.params.payload || '{}');
-                const prevJson = JSON.stringify(readConfig());
-                const saved = saveConfig(payload);
+                const prevJson = JSON.stringify(readConfig(isCodexTarget));
+                const saved = saveConfig(payload, isCodexTarget);
                 const nextJson = JSON.stringify(saved);
                 if (prevJson !== nextJson) {
                     const syncExpr = `window.__ANTIGRAVITY_SYNC_EXTERNAL_CONFIG__&&window.__ANTIGRAVITY_SYNC_EXTERNAL_CONFIG__(${nextJson})`;
                     for (const other of sessions.values()) {
-                        if (other.id !== target.id) {
+                        if (other.id !== target.id && other.isCodex === isCodexTarget) {
                             other.send('Runtime.evaluate', { expression: syncExpr, awaitPromise: false }).catch(() => {});
                         }
                     }
@@ -1387,7 +1392,7 @@ function createSession(target) {
                 await send('Runtime.addBinding', { name: 'agyBridgeCall' });
             } catch (_) {}
 
-            const src = buildInjectedSource();
+            const src = buildInjectedSource(isCodexTarget);
             if (src) {
                 await send('Page.addScriptToEvaluateOnNewDocument', { source: src });
                 await send('Runtime.evaluate', { expression: src, awaitPromise: false });
