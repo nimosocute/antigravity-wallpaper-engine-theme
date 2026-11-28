@@ -191,7 +191,7 @@ if (-not $NoStartup) {
                     $Sc = $WshShell.CreateShortcut($CodexLnk)
                     $Sc.TargetPath = $CodexAlias
                     $Sc.Arguments = '--remote-debugging-port=0'
-                    $Sc.WorkingDirectory = Split-Path -Parent $CodexAlias
+                    $Sc.WorkingDirectory = $env:USERPROFILE
                     if ($CodexIconExe) { $Sc.IconLocation = "$CodexIconExe,0" }
                     $Sc.Save()
                     Write-Host "[install-win] Configured direct themed Codex shortcut: $CodexLnk"
