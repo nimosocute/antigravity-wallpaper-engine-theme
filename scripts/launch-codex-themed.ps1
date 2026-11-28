@@ -17,22 +17,27 @@ if (-not $daemonRunning) {
 
 $procs = Get-CimInstance Win32_Process -Filter "Name='ChatGPT.exe' OR Name='chatgpt-desktop.exe'"
 $hasFlag = $procs | Where-Object { $_.CommandLine -match 'remote-debugging-port' } | Select-Object -First 1
-$mainProc = $procs | Where-Object { $_.Name -eq 'ChatGPT.exe' -and $_.CommandLine -notmatch '--type=' } | Select-Object -First 1
-$uiRenderer = $procs | Where-Object { $_.CommandLine -match '--type=renderer' -and $_.CommandLine -notmatch '--extension-process' } | Select-Object -First 1
+$visibleProc = Get-Process -Name 'ChatGPT' | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
 
-if ($hasFlag -and $uiRenderer) {
-    # Already running with CDP enabled: bring existing themed window to foreground
-    $pkg = Get-AppxPackage OpenAI.Codex | Select-Object -First 1
-    if ($pkg -and $pkg.PackageFamilyName) {
-        Start-Process 'explorer.exe' "shell:AppsFolder\$($pkg.PackageFamilyName)!App"
-    }
+if ($hasFlag -and $visibleProc) {
+    # Already running with CDP enabled and a visible window: restore and focus it directly
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class AgyWinFocus {
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@ -ErrorAction SilentlyContinue
+    [AgyWinFocus]::ShowWindow($visibleProc.MainWindowHandle, 9) | Out-Null
+    [AgyWinFocus]::SetForegroundWindow($visibleProc.MainWindowHandle) | Out-Null
     exit 0
 }
 
-if ($mainProc -or $procs) {
-    # Running without CDP or stuck without renderer: cleanly restart with CDP
+if ($procs) {
+    # Clean up any non-CDP or ghost/headless ChatGPT processes before launching with CDP
     Get-Process -Name 'ChatGPT' | ForEach-Object { try { $_.CloseMainWindow() | Out-Null } catch {} }
-    Start-Sleep -Milliseconds 400
+    Start-Sleep -Milliseconds 350
     Stop-Process -Name 'ChatGPT' -Force
     for ($i = 0; $i -lt 10 -and (Get-Process -Name 'ChatGPT'); $i++) {
         Start-Sleep -Milliseconds 150
