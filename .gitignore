@@ -6,6 +6,7 @@ theme_config.json
 silent-start.vbs
 .install-targets.json
 .agy_slot_state.json
+.codex_media_cache/
 
 # OS / Python / Node junk
 __pycache__/

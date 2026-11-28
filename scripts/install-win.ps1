@@ -171,6 +171,14 @@ if (-not $NoStartup) {
 
         # Create/update direct Codex shortcuts (Start Menu & Desktop) with --remote-debugging-port=0
         $CodexAlias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\chatgpt-desktop.exe'
+        $CodexIconExe = $null
+        try {
+            $CodexPkg = Get-AppxPackage OpenAI.Codex -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($CodexPkg -and $CodexPkg.InstallLocation) {
+                $CandidateExe = Join-Path $CodexPkg.InstallLocation 'app\ChatGPT.exe'
+                if (Test-Path $CandidateExe) { $CodexIconExe = $CandidateExe }
+            }
+        } catch {}
         if (Test-Path $CodexAlias) {
             $CodexShortcuts = @(
                 (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Codex.lnk'),
@@ -182,6 +190,7 @@ if (-not $NoStartup) {
                     $Sc.TargetPath = $CodexAlias
                     $Sc.Arguments = '--remote-debugging-port=0'
                     $Sc.WorkingDirectory = Split-Path -Parent $CodexAlias
+                    if ($CodexIconExe) { $Sc.IconLocation = "$CodexIconExe,0" }
                     $Sc.Save()
                     Write-Host "[install-win] Configured direct themed Codex shortcut: $CodexLnk"
                 } catch {}

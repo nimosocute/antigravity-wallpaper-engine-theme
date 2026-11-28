@@ -111,7 +111,7 @@
             delete window.__AGY_BRIDGE_PENDING__[reqId];
             reject(new Error('Bridge timeout'));
           }
-        }, 26000);
+        }, 45000);
         window.__AGY_BRIDGE_PENDING__[reqId] = {
           resolve: (v) => { clearTimeout(t); resolve(v); },
           reject: (e) => { clearTimeout(t); reject(e); }
@@ -144,10 +144,17 @@
         agyFetchJson(`/api/we/media-data?id=${encodeURIComponent(job.id)}&file=${encodeURIComponent(job.relFile)}`)
           .then((res) => {
             if (!res || !res.ok || !res.dataUrl) return null;
-            return fetch(res.dataUrl)
-              .then(r => r.blob())
-              .then(b => URL.createObjectURL(b))
-              .catch(() => res.dataUrl);
+            try {
+              const comma = res.dataUrl.indexOf(',');
+              if (comma > 0 && res.dataUrl.slice(0, comma).includes(';base64')) {
+                const mime = res.dataUrl.slice(5, comma).split(';')[0] || 'application/octet-stream';
+                const bin = atob(res.dataUrl.slice(comma + 1));
+                const bytes = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                return URL.createObjectURL(new Blob([bytes], { type: mime }));
+              }
+            } catch (e) {}
+            return res.dataUrl;
           })
           .then((finalUrl) => {
             if (finalUrl) {

@@ -689,23 +689,113 @@ function startMediaServer() {
                 res.end(JSON.stringify({ ok: false }));
                 return;
             }
+            const cacheDir = path.join(ROOT_DIR, '.codex_media_cache');
+            const transcodeToMp4 = (inputPath, outMp4Path, cleanupInput) => {
+                globalThis.__agyTranscodeJobs = globalThis.__agyTranscodeJobs || new Map();
+                const existingJob = globalThis.__agyTranscodeJobs.get(outMp4Path);
+                if (existingJob) return existingJob;
+                const job = new Promise((resolve) => {
+                    try {
+                        if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+                        const tmpOut = `${outMp4Path}.tmp.mp4`;
+                        execFile(
+                            'ffmpeg',
+                            [
+                                '-y', '-i', inputPath,
+                                '-vf', "scale='min(1920,iw)':-2",
+                                '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '24',
+                                '-maxrate', '3.5M', '-bufsize', '7M',
+                                '-c:a', 'aac', '-b:a', '96k',
+                                '-fs', '22M', '-movflags', '+faststart',
+                                tmpOut,
+                            ],
+                            { timeout: 40000, windowsHide: true },
+                            (err) => {
+                                if (cleanupInput) {
+                                    try { fs.unlinkSync(inputPath); } catch (_) {}
+                                }
+                                if (err || !fs.existsSync(tmpOut)) {
+                                    try { fs.unlinkSync(tmpOut); } catch (_) {}
+                                    resolve(false);
+                                    return;
+                                }
+                                try {
+                                    fs.renameSync(tmpOut, outMp4Path);
+                                    resolve(true);
+                                } catch (_) {
+                                    resolve(false);
+                                }
+                            }
+                        );
+                    } catch (_) {
+                        if (cleanupInput) {
+                            try { fs.unlinkSync(inputPath); } catch (_) {}
+                        }
+                        resolve(false);
+                    }
+                }).finally(() => {
+                    globalThis.__agyTranscodeJobs.delete(outMp4Path);
+                });
+                globalThis.__agyTranscodeJobs.set(outMp4Path, job);
+                return job;
+            };
+            const sendFileAsDataUrl = (filePath, mime) => {
+                const buf = fs.readFileSync(filePath);
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: true, dataUrl: `data:${mime};base64,${buf.toString('base64')}` }));
+            };
             try {
                 if (relFile === '__pkg__') {
                     const catalog = scanWallpaperEngineItems(false);
                     const found = catalog.items.find((x) => x.id === id && x.pkgSlice);
                     const pkgPath = path.join(wsDir, id, 'scene.pkg');
-                    if (!found || !fs.existsSync(pkgPath) || found.pkgSlice.length > 28 * 1024 * 1024) {
+                    if (!found || !fs.existsSync(pkgPath)) {
                         res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
                         res.end(JSON.stringify({ ok: false }));
                         return;
                     }
-                    const fd = fs.openSync(pkgPath, 'r');
-                    const buf = Buffer.alloc(found.pkgSlice.length);
-                    fs.readSync(fd, buf, 0, buf.length, found.pkgSlice.offset);
-                    fs.closeSync(fd);
-                    const mime = found.pkgSlice.mime || 'application/octet-stream';
-                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-                    res.end(JSON.stringify({ ok: true, dataUrl: `data:${mime};base64,${buf.toString('base64')}` }));
+                    if (found.pkgSlice.length <= 24 * 1024 * 1024) {
+                        const fd = fs.openSync(pkgPath, 'r');
+                        const buf = Buffer.alloc(found.pkgSlice.length);
+                        fs.readSync(fd, buf, 0, buf.length, found.pkgSlice.offset);
+                        fs.closeSync(fd);
+                        const mime = found.pkgSlice.mime || 'application/octet-stream';
+                        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: true, dataUrl: `data:${mime};base64,${buf.toString('base64')}` }));
+                        return;
+                    }
+                    if (found.pkgSlice.mediaKind === 'video') {
+                        const cachedMp4 = path.join(cacheDir, `${id}_pkg.mp4`);
+                        if (fs.existsSync(cachedMp4) && fs.statSync(cachedMp4).size <= 26 * 1024 * 1024) {
+                            sendFileAsDataUrl(cachedMp4, 'video/mp4');
+                            return;
+                        }
+                        if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+                        const tmpSrc = path.join(cacheDir, `${id}_pkg.src.mp4`);
+                        const readStream = fs.createReadStream(pkgPath, {
+                            start: found.pkgSlice.offset,
+                            end: found.pkgSlice.offset + found.pkgSlice.length - 1,
+                        });
+                        const writeStream = fs.createWriteStream(tmpSrc);
+                        readStream.pipe(writeStream);
+                        writeStream.on('finish', () => {
+                            transcodeToMp4(tmpSrc, cachedMp4, true).then((ok) => {
+                                if (ok && fs.existsSync(cachedMp4)) {
+                                    sendFileAsDataUrl(cachedMp4, 'video/mp4');
+                                } else {
+                                    res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+                                    res.end(JSON.stringify({ ok: false }));
+                                }
+                            });
+                        });
+                        writeStream.on('error', () => {
+                            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+                            res.end(JSON.stringify({ ok: false }));
+                        });
+                        return;
+                    }
+                    res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false }));
                     return;
                 }
                 const itemDir = path.join(wsDir, id);
@@ -716,16 +806,30 @@ function startMediaServer() {
                     return;
                 }
                 const stat = fs.statSync(fullPath);
-                if (stat.size > 28 * 1024 * 1024) {
+                const ext = path.extname(fullPath).toLowerCase();
+                if (stat.size > 24 * 1024 * 1024) {
+                    if (['.mp4', '.webm', '.mov', '.mkv'].includes(ext)) {
+                        const cachedMp4 = path.join(cacheDir, `${id}_vid.mp4`);
+                        if (fs.existsSync(cachedMp4) && fs.statSync(cachedMp4).size <= 26 * 1024 * 1024) {
+                            sendFileAsDataUrl(cachedMp4, 'video/mp4');
+                            return;
+                        }
+                        transcodeToMp4(fullPath, cachedMp4, false).then((ok) => {
+                            if (ok && fs.existsSync(cachedMp4)) {
+                                sendFileAsDataUrl(cachedMp4, 'video/mp4');
+                            } else {
+                                res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+                                res.end(JSON.stringify({ ok: false, error: 'Too large' }));
+                            }
+                        });
+                        return;
+                    }
                     res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
                     res.end(JSON.stringify({ ok: false, error: 'Too large' }));
                     return;
                 }
-                const ext = path.extname(fullPath).toLowerCase();
                 const mime = MIME_TYPES[ext] || 'application/octet-stream';
-                const buf = fs.readFileSync(fullPath);
-                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: true, dataUrl: `data:${mime};base64,${buf.toString('base64')}` }));
+                sendFileAsDataUrl(fullPath, mime);
                 return;
             } catch (_) {
                 res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
