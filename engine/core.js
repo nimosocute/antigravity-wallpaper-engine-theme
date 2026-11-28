@@ -252,8 +252,9 @@
     window.addEventListener('mousemove', onMouseMove, { passive: true });
 
     function resizeCanvases() {
-      const cw = Math.max(640, Math.round(layer.clientWidth || window.innerWidth || 1920));
-      const ch = Math.max(360, Math.round(layer.clientHeight || window.innerHeight || 1080));
+      const scale = IS_CODEX ? 0.75 : 1;
+      const cw = Math.max(640, Math.round((layer.clientWidth || window.innerWidth || 1920) * scale));
+      const ch = Math.max(360, Math.round((layer.clientHeight || window.innerHeight || 1080) * scale));
       if (glCanvas.width !== cw || glCanvas.height !== ch) {
         glCanvas.width = cw;
         glCanvas.height = ch;
@@ -437,7 +438,7 @@
         rafId = 0;
         return;
       }
-      if (now - lastFrame < 32) {
+      if (now - lastFrame < (IS_CODEX ? 45 : 32)) {
         rafId = requestAnimationFrame(renderFrame);
         return;
       }
@@ -620,6 +621,7 @@
         });
       }
 
+      const reqKey = mediaKey;
       if (live.type === 'web') {
         const iframe = document.createElement('iframe');
         iframe.id = 'agy-live-wp-web';
@@ -638,7 +640,6 @@
         if (existingScrim) layer.insertBefore(video, existingScrim);
         else layer.appendChild(video);
 
-        const reqKey = mediaKey;
         if (useDx11Stream) {
           const prevSlot = window.__AGY_WE_ACTIVE_SLOT__ || '';
           const nextSlot = prevSlot === 'AGY_BG_A' ? 'AGY_BG_B' : 'AGY_BG_A';
@@ -783,14 +784,41 @@
             });
         } else {
           if (IS_CODEX && mediaUrl.startsWith('https://agy-local.invalid/')) {
+            const isPkgVideo = Boolean(live.pkgSlice && live.pkgSlice.mediaKind === 'video');
+            const fallbackToPreviewScene = () => {
+              if (!live.previewFile) return;
+              resolveCodexMediaUrl(live.id, live.previewFile, (prevUrl) => {
+                const l2 = document.getElementById('agy-live-wp-layer');
+                if (!prevUrl || !l2 || l2.dataset.mediaKey !== reqKey) return;
+                stopVideoElement(video);
+                try { video.remove(); } catch (e) {}
+                const sc = l2.querySelector('#agy-live-wp-scrim');
+                mountStandaloneSceneEngine(l2, live, prevUrl);
+                if (sc) l2.appendChild(sc);
+              }, true);
+            };
             resolveCodexMediaUrl(live.id, live.relFile, (dataUrl) => {
               const curLayer = document.getElementById('agy-live-wp-layer');
               if (!curLayer || curLayer.dataset.mediaKey !== reqKey) return;
-              const sc = curLayer.querySelector('#agy-live-wp-scrim');
-              mountStandaloneSceneEngine(curLayer, live, dataUrl);
-              if (sc) curLayer.appendChild(sc);
+              if (dataUrl && isPkgVideo) {
+                if (!video.isConnected) return;
+                video.style.opacity = '1';
+                video.src = dataUrl;
+                const p = video.play();
+                if (p && typeof p.catch === 'function') p.catch(() => {});
+              } else if (dataUrl) {
+                stopVideoElement(video);
+                try { video.remove(); } catch (e) {}
+                const sc = curLayer.querySelector('#agy-live-wp-scrim');
+                mountStandaloneSceneEngine(curLayer, live, dataUrl);
+                if (sc) curLayer.appendChild(sc);
+              } else {
+                fallbackToPreviewScene();
+              }
             }, true);
           } else {
+            stopVideoElement(video);
+            try { video.remove(); } catch (e) {}
             mountStandaloneSceneEngine(layer, live, mediaUrl);
           }
         }
