@@ -163,9 +163,11 @@
                 }
               }
               job.cb(finalUrl);
+            } else {
+              job.cb(null);
             }
           })
-          .catch(() => {})
+          .catch(() => { try { job.cb(null); } catch (e) {} })
           .finally(() => {
             window.__AGY_CODEX_MEDIA_INFLIGHT__ = Math.max(0, window.__AGY_CODEX_MEDIA_INFLIGHT__ - 1);
             pumpQueue();
@@ -805,10 +807,24 @@
         if (IS_CODEX && mediaUrl.startsWith('https://agy-local.invalid/')) {
           resolveCodexMediaUrl(live.id, live.relFile, (dataUrl) => {
             const curLayer = document.getElementById('agy-live-wp-layer');
-            if (!video.isConnected || !curLayer || curLayer.dataset.mediaKey !== reqKey) return;
-            video.src = dataUrl;
-            const p = video.play();
-            if (p && typeof p.catch === 'function') p.catch(() => {});
+            if (!curLayer || curLayer.dataset.mediaKey !== reqKey) return;
+            if (dataUrl) {
+              if (!video.isConnected) return;
+              video.src = dataUrl;
+              const p = video.play();
+              if (p && typeof p.catch === 'function') p.catch(() => {});
+            } else if (live.previewFile) {
+              // Video >28MB on Codex app://- sandbox: fall back to animated preview in standalone scene engine
+              resolveCodexMediaUrl(live.id, live.previewFile, (prevUrl) => {
+                const l2 = document.getElementById('agy-live-wp-layer');
+                if (!prevUrl || !l2 || l2.dataset.mediaKey !== reqKey) return;
+                stopVideoElement(video);
+                try { video.remove(); } catch (e) {}
+                const sc = l2.querySelector('#agy-live-wp-scrim');
+                mountStandaloneSceneEngine(l2, live, prevUrl);
+                if (sc) l2.appendChild(sc);
+              }, true);
+            }
           }, true);
         } else {
           video.src = mediaUrl;
@@ -3575,7 +3591,7 @@
     window.__AGY_TICK_TIMER__ = setTimeout(() => {
       window.__AGY_TICK_TIMER__ = 0;
       tick();
-    }, 180);
+    }, IS_CODEX ? 350 : 180);
   }
 
   clearTitleBarTimers();
