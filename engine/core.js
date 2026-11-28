@@ -1691,9 +1691,11 @@
       .agy-shell main,
       .agy-shell .bg-surface,
       .agy-shell [class*="bg-(--header-tint)"],
+      .agy-shell [class*="--app-shell-left-panel-width"],
       .agy-shell div.h-toolbar-sm {
         background: transparent !important;
         background-color: transparent !important;
+        background-image: none !important;
       }
       .agy-shell [class*="backdrop-blur"],
       .agy-shell .overflow-y-auto,
