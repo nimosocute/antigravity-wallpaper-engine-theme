@@ -1743,12 +1743,38 @@
       .agy-shell aside.app-shell-left-panel {
         background: ${useUnifiedGlass ? 'transparent' : sidebarBg} !important;
       }
+      .agy-shell [class*="ComposerLayoutRoot-"] {
+        background: transparent !important;
+        background-color: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        position: relative !important;
+      }
       .agy-shell [class*="ComposerLayoutBody-"] {
         background: ${st.inputStyle === 'glass' ? (bubbleTheme.inputGlassBg || 'rgba(20, 15, 13, 0.56)') : (bubbleTheme.inputCardBg || 'rgba(26, 18, 15, 0.88)')} !important;
-        border: 1px solid ${bubbleTheme.borderColor || 'rgba(255, 255, 255, 0.16)'} !important;
-        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 0 12px ${bubbleTheme.glow || 'rgba(0,0,0,0.2)'} !important;
-        border-radius: 16px !important;
+        border: ${st.inputStyle === 'double_gold' ? '1.5px solid #fbbf24' : st.inputStyle === 'minimal' ? '1px solid rgba(255, 255, 255, 0.14)' : `1px solid ${bubbleTheme.borderColor || 'rgba(255, 255, 255, 0.16)'}`} !important;
+        box-shadow: ${st.inputStyle === 'double_gold' ? '0 0 0 1px rgba(245, 158, 11, 0.28), 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 14px rgba(251, 191, 36, 0.25)' : st.inputStyle === 'minimal' ? '0 4px 16px rgba(0, 0, 0, 0.28)' : `0 6px 24px rgba(0, 0, 0, 0.35), 0 0 12px ${bubbleTheme.glow || 'rgba(0,0,0,0.2)'}`} !important;
+        border-radius: 22px !important;
+        position: relative !important;
       }
+      ${st.inputStyle !== 'minimal' && bubbleTheme.sticker ? `
+      .agy-shell [class*="ComposerLayoutRoot-"]::after {
+        content: "";
+        position: absolute;
+        top: ${bubbleTheme.stickerTop}px;
+        right: ${bubbleTheme.stickerRight}px;
+        width: ${bubbleTheme.stickerW + 8}px;
+        height: ${bubbleTheme.stickerH + 2}px;
+        background-image: url("${bubbleTheme.sticker}");
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: right top;
+        pointer-events: none;
+        z-index: 6;
+      }
+      ` : ''}
       .agy-shell [class*="item-pgg3ON"] {
         background: ${mainTheme.aiCardBg || 'rgba(18, 18, 22, 0.68)'} !important;
         border: 1px solid ${mainTheme.aiCardBorder || 'rgba(255, 255, 255, 0.12)'} !important;
