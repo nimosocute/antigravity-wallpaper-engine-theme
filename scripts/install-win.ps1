@@ -170,7 +170,7 @@ if (-not $NoStartup) {
             Write-Warning "[install-win] Scheduled Task registration skipped: $($_.Exception.Message)"
         }
 
-        # Create/update direct Codex shortcuts (Start Menu & Desktop) with --remote-debugging-port=0
+        # Create/update direct Codex shortcuts (Start Menu & Desktop) via silent VBS launcher
         $CodexAlias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\chatgpt-desktop.exe'
         $CodexIconExe = $null
         try {
@@ -181,6 +181,15 @@ if (-not $NoStartup) {
             }
         } catch {}
         if (Test-Path $CodexAlias) {
+            $LaunchCodexPs1 = Join-Path $ScriptDir 'launch-codex-themed.ps1'
+            $LaunchCodexVbs = Join-Path $RepoRoot 'launch-codex.vbs'
+            $LaunchVbsContent = @"
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.CurrentDirectory = "$($env:USERPROFILE.Replace('"', '""'))"
+WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""$($LaunchCodexPs1.Replace('"', '""'))""", 0, False
+"@
+            Set-Content -Path $LaunchCodexVbs -Value $LaunchVbsContent -Encoding ASCII
+
             $DesktopDir = [Environment]::GetFolderPath('Desktop')
             $CodexShortcuts = @(
                 (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Codex.lnk'),
@@ -189,8 +198,8 @@ if (-not $NoStartup) {
             foreach ($CodexLnk in $CodexShortcuts) {
                 try {
                     $Sc = $WshShell.CreateShortcut($CodexLnk)
-                    $Sc.TargetPath = $CodexAlias
-                    $Sc.Arguments = '--remote-debugging-port=0'
+                    $Sc.TargetPath = 'wscript.exe'
+                    $Sc.Arguments = "`"$LaunchCodexVbs`""
                     $Sc.WorkingDirectory = $env:USERPROFILE
                     if ($CodexIconExe) { $Sc.IconLocation = "$CodexIconExe,0" }
                     $Sc.Save()

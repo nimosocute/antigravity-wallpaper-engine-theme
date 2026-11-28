@@ -89,9 +89,11 @@ function removeAutoStart() {
         if (fs.existsSync(targetsFile)) {
             fs.unlinkSync(targetsFile);
         }
-        if (fs.existsSync(VBS_FILE)) {
-            fs.unlinkSync(VBS_FILE);
-            console.log(`[uninstall] Removed helper script: ${VBS_FILE}`);
+        for (const vbs of [VBS_FILE, path.join(ROOT_DIR, 'launch-codex.vbs')]) {
+            if (fs.existsSync(vbs)) {
+                fs.unlinkSync(vbs);
+                console.log(`[uninstall] Removed helper script: ${vbs}`);
+            }
         }
         return;
     }
