@@ -130,10 +130,11 @@ if (-not $NoStartup) {
         Write-Host "[install-win] Registered native Antigravity sidecar: $(Join-Path $SidecarDir 'sidecar.json')"
 
         # Ensure Antigravity shortcuts include --remote-debugging-port=0 (required on Antigravity >= 2.33.0)
+        $DesktopDir = [Environment]::GetFolderPath('Desktop')
         $AgyShortcuts = @(
             (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Antigravity.lnk'),
             (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Antigravity.lnk'),
-            (Join-Path $env:USERPROFILE 'Desktop\Antigravity.lnk')
+            (Join-Path $DesktopDir 'Antigravity.lnk')
         )
         foreach ($LnkPath in $AgyShortcuts) {
             if (Test-Path $LnkPath) {
@@ -180,9 +181,10 @@ if (-not $NoStartup) {
             }
         } catch {}
         if (Test-Path $CodexAlias) {
+            $DesktopDir = [Environment]::GetFolderPath('Desktop')
             $CodexShortcuts = @(
                 (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Codex.lnk'),
-                (Join-Path $env:USERPROFILE 'Desktop\Codex.lnk')
+                (Join-Path $DesktopDir 'Codex.lnk')
             )
             foreach ($CodexLnk in $CodexShortcuts) {
                 try {
